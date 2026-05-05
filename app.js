@@ -6,8 +6,8 @@
 // CONFIG  ← ใส่ Client ID + API Key ตรงนี้
 // ───────────────────────────────────────────────
 const CONFIG = {
-  GOOGLE_CLIENT_ID: '462797314829-vscbflu69udrbepsr089dsrul0s6utmc.apps.googleusercontent.com',
-  GOOGLE_API_KEY:   'AIzaSyAf4J37Gxs8XP2iLDjpxX-1orCz7jddauM',
+  GOOGLE_CLIENT_ID: 'PASTE_YOUR_CLIENT_ID_HERE',
+  GOOGLE_API_KEY:   'PASTE_YOUR_API_KEY_HERE',
 
   PASSWORD_HASH: '118d7c585c0ca03cd5fbeb837481aa07cdf151b94714c3a90d4b28ee560540a7',
 
@@ -564,7 +564,7 @@ function renderPhotoPreview(){
   state.pendingPhotos.forEach(p=>{
     const el = document.createElement('div');
     el.className = 'pp';
-    const src = p.dataURL || (p.drive_id ? driveImageUrl(p.drive_id) : '');
+    const src = p.dataURL || getPhotoSrc(p);
     el.innerHTML = `<img src="${src}" alt=""/><span class="x" data-id="${p.id}">×</span>`;
     el.querySelector('.x').addEventListener('click', e=>{
       e.stopPropagation();
@@ -575,7 +575,17 @@ function renderPhotoPreview(){
   });
 }
 
+function getPhotoSrc(photo){
+  // Prefer stored thumbnailLink (works without auth, with token), fall back to ID-based URL, then dataURL
+  if (!photo) return '';
+  if (photo.thumbnail_url) return photo.thumbnail_url;
+  if (photo.dataURL) return photo.dataURL;
+  if (photo.drive_id) return driveImageUrl(photo.drive_id); // legacy fallback
+  return '';
+}
+
 function driveImageUrl(driveId){
+  // Legacy fallback URL — may not always work but kept for backwards compat
   return `https://drive.google.com/thumbnail?id=${driveId}&sz=w800`;
 }
 
@@ -722,17 +732,17 @@ async function onSaveStory(e){
   const newPhotos = [];
   for (const p of state.pendingPhotos){
     if (p.drive_id){
-      newPhotos.push({ id: p.id, story_id: id, drive_id: p.drive_id, name: p.name, dataURL: null, kind: 'image' });
+      newPhotos.push({ id: p.id, story_id: id, drive_id: p.drive_id, thumbnail_url: p.thumbnail_url || '', name: p.name, dataURL: null, kind: 'image' });
     } else if (p.file && state.google.accessToken){
       try{
-        const did = await uploadToDrive(p.file);
-        newPhotos.push({ id: p.id, story_id: id, drive_id: did, name: p.name, dataURL: null, kind: 'image' });
+        const result = await uploadToDrive(p.file);
+        newPhotos.push({ id: p.id, story_id: id, drive_id: result.id, thumbnail_url: result.thumbnail_url || '', name: p.name, dataURL: null, kind: 'image' });
       } catch(err){
         console.error(err);
-        newPhotos.push({ id: p.id, story_id: id, drive_id: null, name: p.name, dataURL: p.dataURL, kind: 'image' });
+        newPhotos.push({ id: p.id, story_id: id, drive_id: null, thumbnail_url: '', name: p.name, dataURL: p.dataURL, kind: 'image' });
       }
     } else if (p.dataURL){
-      newPhotos.push({ id: p.id, story_id: id, drive_id: null, name: p.name, dataURL: p.dataURL, kind: 'image' });
+      newPhotos.push({ id: p.id, story_id: id, drive_id: null, thumbnail_url: '', name: p.name, dataURL: p.dataURL, kind: 'image' });
     }
   }
 
@@ -742,7 +752,8 @@ async function onSaveStory(e){
     if (state.google.accessToken){
       try {
         const audioFile = new File([state.pendingVoiceBlob], `${id}_voice.webm`, {type: state.pendingVoiceBlob.type});
-        voiceDriveId = await uploadToDrive(audioFile);
+        const result = await uploadToDrive(audioFile);
+        voiceDriveId = result.id;
       } catch(err){
         console.error('voice upload', err);
         toast('อัปเสียงไม่สำเร็จ — เก็บใน local', '', 3000);
@@ -942,7 +953,7 @@ function renderAll(){
   list.innerHTML = stories.map((s, idx)=>{
     const num = stories.length - idx;
     const photos = getStoryPhotos(s.id);
-    const cover = photos[0] ? (photos[0].drive_id ? driveImageUrl(photos[0].drive_id) : photos[0].dataURL) : null;
+    const cover = photos[0] ? getPhotoSrc(photos[0]) : null;
     const moodEmoji = s.mood ? MOOD_EMOJI[s.mood] || '' : '';
     const dateLabel = s.day
       ? `${s.day} ${monthsTH[s.month]} · ${s.year}`
@@ -1056,12 +1067,12 @@ function openStory(id){
   const monthsFull = ['','January','February','March','April','May','June',
                       'July','August','September','October','November','December'];
   const photos = getStoryPhotos(id);
-  const cover = photos[0] ? (photos[0].drive_id ? driveImageUrl(photos[0].drive_id) : photos[0].dataURL) : null;
+  const cover = photos[0] ? getPhotoSrc(photos[0]) : null;
   const moodEmoji = s.mood ? MOOD_EMOJI[s.mood] || '' : '';
 
   const galleryHTML = photos.length > 1
     ? `<div class="mc-gallery">${photos.slice(1).map(p=>{
-        const src = p.drive_id ? driveImageUrl(p.drive_id) : p.dataURL;
+        const src = getPhotoSrc(p);
         return `<img src="${src}" alt="" loading="lazy"/>`;
       }).join('')}</div>`
     : '';
@@ -1105,8 +1116,8 @@ function editStory(id){
   if (!s) return;
   state.editingId = id;
   state.pendingPhotos = getStoryPhotos(id).map(p=>({
-    id: p.id, drive_id: p.drive_id, name: p.name,
-    dataURL: p.dataURL || (p.drive_id ? driveImageUrl(p.drive_id) : ''),
+    id: p.id, drive_id: p.drive_id, thumbnail_url: p.thumbnail_url || '', name: p.name,
+    dataURL: p.dataURL || getPhotoSrc(p),
   }));
   state.pendingVoiceBlob = null;
   state.pendingVoiceDriveId = s.voice_drive_id || null;
@@ -1530,7 +1541,7 @@ async function migrateStoriesSchema(){
 async function writeHeaders(){
   const updates = [
     {range: `${CONFIG.TAB_STORIES}!A1:K1`, values: [['id','year','month','day','title','text','place','author','mood','voice_drive_id','updatedAt']]},
-    {range: `${CONFIG.TAB_PHOTOS}!A1:E1`,  values: [['id','story_id','drive_id','name','dataURL_fallback']]},
+    {range: `${CONFIG.TAB_PHOTOS}!A1:F1`,  values: [['id','story_id','drive_id','name','dataURL_fallback','thumbnail_url']]},
     {range: `${CONFIG.TAB_BACKUPS}!A1:D1`, values: [['date','timestamp','story_count','snapshot_json']]},
     {range: `${CONFIG.TAB_CAPSULES}!A1:F1`,values: [['id','title','text','author','createdAt','openAt']]},
   ];
@@ -1573,7 +1584,7 @@ async function pullFromSheet(){
   try {
     const [storyRows, photoRows, capsuleRows] = await Promise.all([
       safeGet(`${CONFIG.TAB_STORIES}!A2:K`),
-      safeGet(`${CONFIG.TAB_PHOTOS}!A2:E`),
+      safeGet(`${CONFIG.TAB_PHOTOS}!A2:F`),
       safeGet(`${CONFIG.TAB_CAPSULES}!A2:F`),
     ]);
 
@@ -1597,6 +1608,7 @@ async function pullFromSheet(){
       drive_id: r[2] || null,
       name: r[3] || '',
       dataURL: r[4] || null,
+      thumbnail_url: r[5] || '',
     })).filter(p=>p.id && p.story_id);
 
     const remoteCapsules = capsuleRows.map(r=>({
@@ -1622,6 +1634,9 @@ async function pullFromSheet(){
     renderCapsules();
     refreshFilterOptions();
     checkOnThisDay();
+
+    // Backfill missing thumbnail URLs in the background (legacy photos)
+    backfillThumbnails();
   } catch(err){
     console.error('pull error', err);
     throw err;
@@ -1665,7 +1680,7 @@ async function syncToSheet(){
   ]);
 
   const photoValues = state.photos.map(p=>[
-    p.id, p.story_id, p.drive_id || '', p.name || '', p.dataURL || '',
+    p.id, p.story_id, p.drive_id || '', p.name || '', p.dataURL || '', p.thumbnail_url || '',
   ]);
 
   await Promise.all([
@@ -1675,7 +1690,7 @@ async function syncToSheet(){
     }),
     gapi.client.sheets.spreadsheets.values.clear({
       spreadsheetId: state.google.sheetId,
-      range: `${CONFIG.TAB_PHOTOS}!A2:E`,
+      range: `${CONFIG.TAB_PHOTOS}!A2:F`,
     }),
   ]);
 
@@ -1786,7 +1801,8 @@ async function uploadToDrive(file){
   form.append('metadata', new Blob([JSON.stringify(metadata)], {type:'application/json'}));
   form.append('file', file);
 
-  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
+  // Upload file (request thumbnailLink + webContentLink in response)
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,thumbnailLink,webContentLink', {
     method:'POST',
     headers:{ Authorization: `Bearer ${state.google.accessToken}` },
     body: form,
@@ -1794,12 +1810,67 @@ async function uploadToDrive(file){
   if (!res.ok) throw new Error('Drive upload failed: ' + (await res.text()));
   const data = await res.json();
 
+  // Make file public so thumbnailLink works without auth
   await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`, {
     method:'POST',
     headers:{ Authorization: `Bearer ${state.google.accessToken}`, 'Content-Type':'application/json' },
     body: JSON.stringify({ role:'reader', type:'anyone' }),
   });
-  return data.id;
+
+  // Re-fetch metadata after permission change to get the public thumbnailLink
+  let thumbnailUrl = data.thumbnailLink || '';
+  try {
+    const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}?fields=thumbnailLink,webContentLink`, {
+      headers: { Authorization: `Bearer ${state.google.accessToken}` },
+    });
+    if (metaRes.ok){
+      const meta = await metaRes.json();
+      if (meta.thumbnailLink) thumbnailUrl = meta.thumbnailLink;
+    }
+  } catch(e){ console.warn('Could not refetch metadata:', e); }
+
+  return { id: data.id, thumbnail_url: thumbnailUrl };
+}
+
+async function fetchDriveThumbnail(driveId){
+  // Helper to fetch thumbnail URL for an existing Drive file (used for migration)
+  if (!state.google.accessToken) return '';
+  try {
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${driveId}?fields=thumbnailLink`, {
+      headers: { Authorization: `Bearer ${state.google.accessToken}` },
+    });
+    if (res.ok){
+      const data = await res.json();
+      return data.thumbnailLink || '';
+    }
+  } catch(e){ console.warn('thumbnail fetch failed:', e); }
+  return '';
+}
+
+async function backfillThumbnails(){
+  // Find photos with drive_id but no thumbnail_url and fetch them
+  if (!state.google.accessToken) return;
+  const need = state.photos.filter(p => p.drive_id && !p.thumbnail_url);
+  if (need.length === 0) return;
+
+  console.log(`Backfilling ${need.length} thumbnail URLs...`);
+  let updated = 0;
+  for (const photo of need){
+    const url = await fetchDriveThumbnail(photo.drive_id);
+    if (url){
+      photo.thumbnail_url = url;
+      updated++;
+    }
+  }
+  if (updated > 0){
+    saveLS(LS.PHOTOS, state.photos);
+    renderAll();
+    // Push back to Sheet so it persists
+    if (state.google.accessToken){
+      try { await syncToSheet(); } catch(e){ console.warn('backfill sync failed', e); }
+    }
+    console.log(`Backfilled ${updated} thumbnails`);
+  }
 }
 
 
@@ -2042,7 +2113,7 @@ function buildBookHTML(book){
   for (const s of stories){
     const ps = getStoryPhotos(s.id);
     if (ps[0]){
-      heroPhotoSrc = ps[0].drive_id ? driveImageUrl(ps[0].drive_id) : ps[0].dataURL;
+      heroPhotoSrc = getPhotoSrc(ps[0]);
       break;
     }
   }
@@ -2594,7 +2665,7 @@ function buildBookHTML(book){
         ${s.place ? `<div class="story-place">— ${escapeHtml(s.place)} —</div>` : ''}
         <div class="story-text">${escapeHtml(s.text||'')}</div>
         ${photos.length > 0 ? `<div class="story-photos">${photos.slice(0,4).map(p=>{
-          const src = p.drive_id ? driveImageUrl(p.drive_id) : (p.dataURL||'');
+          const src = getPhotoSrc(p);
           return src ? `<img src="${src}" />` : '';
         }).join('')}</div>` : ''}
       </div>
