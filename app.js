@@ -16,8 +16,8 @@
 // ───────────────────────────────────────────────
 const CONFIG = {
   // Google credentials (embedded — restricted to apirakchai.github.io only)
-  GOOGLE_CLIENT_ID: '462797314829-vscbflu69udrbepsr089dsrul0s6utmc.apps.googleusercontent.com',
-  GOOGLE_API_KEY:   'AIzaSyAf4J37Gxs8XP2iLDjpxX-1orCz7jddauM',
+  GOOGLE_CLIENT_ID: 'PASTE_YOUR_CLIENT_ID_HERE',
+  GOOGLE_API_KEY:   'PASTE_YOUR_API_KEY_HERE',
 
   // SHA-256 of "080121"
   PASSWORD_HASH: '118d7c585c0ca03cd5fbeb837481aa07cdf151b94714c3a90d4b28ee560540a7',
@@ -894,21 +894,25 @@ async function pullFromSheet(){
     console.warn('Cannot validate tabs, proceeding anyway:', e);
   }
 
-  try {
-    // Use individual gets instead of batchGet to avoid gapi serialization issues
-    const [storiesRes, photosRes] = await Promise.all([
-      gapi.client.sheets.spreadsheets.values.get({
+  // Helper: gapi requests aren't standard Promises, wrap them so we can catch
+  const safeGet = async (range)=>{
+    try {
+      const r = await gapi.client.sheets.spreadsheets.values.get({
         spreadsheetId: state.google.sheetId,
-        range: `${CONFIG.TAB_STORIES}!A2:H`,
-      }).catch(e => { console.warn('Stories fetch failed', e); return {result:{values:[]}}; }),
-      gapi.client.sheets.spreadsheets.values.get({
-        spreadsheetId: state.google.sheetId,
-        range: `${CONFIG.TAB_PHOTOS}!A2:E`,
-      }).catch(e => { console.warn('Photos fetch failed', e); return {result:{values:[]}}; }),
-    ]);
+        range,
+      });
+      return r.result?.values || [];
+    } catch(e){
+      console.warn(`Fetch failed for ${range}:`, e);
+      return [];
+    }
+  };
 
-    const storyRows = storiesRes.result?.values || [];
-    const photoRows = photosRes.result?.values  || [];
+  try {
+    const [storyRows, photoRows] = await Promise.all([
+      safeGet(`${CONFIG.TAB_STORIES}!A2:H`),
+      safeGet(`${CONFIG.TAB_PHOTOS}!A2:E`),
+    ]);
 
     const remoteStories = storyRows.map(r=>({
       id: r[0],
