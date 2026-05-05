@@ -6,8 +6,8 @@
 // CONFIG  ← ใส่ Client ID + API Key ตรงนี้
 // ───────────────────────────────────────────────
 const CONFIG = {
-  GOOGLE_CLIENT_ID: '462797314829-vscbflu69udrbepsr089dsrul0s6utmc.apps.googleusercontent.com',
-  GOOGLE_API_KEY:   'AIzaSyAf4J37Gxs8XP2iLDjpxX-1orCz7jddauM',
+  GOOGLE_CLIENT_ID: 'PASTE_YOUR_CLIENT_ID_HERE',
+  GOOGLE_API_KEY:   'PASTE_YOUR_API_KEY_HERE',
 
   PASSWORD_HASH: '118d7c585c0ca03cd5fbeb837481aa07cdf151b94714c3a90d4b28ee560540a7',
 
@@ -1833,40 +1833,563 @@ function generateBook(){
 }
 
 function buildBookHTML(book){
-  const monthsTH = ['','ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+  const monthsTH = ['','มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน',
+                    'กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+  const monthsShort = ['','ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
   const stories = [...book.stories].sort((a,b)=> (a.year - b.year) || (a.month - b.month));
+
+  // Compute period and stats
+  const years = [...new Set(stories.map(s=>s.year))].sort();
+  const yearRange = years.length === 1 ? `${years[0]}` : `${years[0]} — ${years[years.length-1]}`;
+  const totalPhotos = stories.reduce((sum, s) => sum + getStoryPhotos(s.id).length, 0);
+
+  // Pick a hero photo for cover (first story with photos, or null)
+  let heroPhotoSrc = null;
+  for (const s of stories){
+    const ps = getStoryPhotos(s.id);
+    if (ps[0]){
+      heroPhotoSrc = ps[0].drive_id ? driveImageUrl(ps[0].drive_id) : ps[0].dataURL;
+      break;
+    }
+  }
 
   const css = `
     <style>
-      @page { size: A4; margin: 22mm; }
+      @page { size: A4; margin: 0; }
+      @page :first { margin: 0; }
+      *, *::before, *::after { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
       body { font-family: 'Sarabun', 'Cormorant Garamond', serif; color: #1a1a1a; line-height: 1.7; }
-      .cover { text-align: center; padding-top: 40mm; page-break-after: always; }
-      .cover-mark { font-family: 'Italiana', serif; font-size: 60px; letter-spacing: .4em; color: #c9a961; }
-      .cover h1 { font-family: 'Italiana', serif; font-size: 48px; font-weight: 400; margin: 30px 0 10px; }
-      .cover p { font-style: italic; color: #888; letter-spacing: .2em; }
-      .story { page-break-inside: avoid; padding: 12mm 0; border-bottom: 1px solid #eee; }
+
+      /* ═══════ COVER PAGE ═══════ */
+      .cover-page {
+        position: relative;
+        width: 210mm; height: 297mm;
+        background:
+          radial-gradient(ellipse at 30% 25%, rgba(201,169,97,.18) 0%, transparent 55%),
+          radial-gradient(ellipse at 75% 80%, rgba(212,165,165,.10) 0%, transparent 50%),
+          linear-gradient(165deg, #122a5e 0%, #0a1f44 50%, #061330 100%);
+        color: #f7f4ec;
+        page-break-after: always;
+        overflow: hidden;
+      }
+      .cover-page::before {
+        content: '';
+        position: absolute;
+        inset: 12mm;
+        border: 1px solid rgba(232,216,176,.35);
+        pointer-events: none;
+      }
+      .cover-page::after {
+        content: '';
+        position: absolute;
+        inset: 13.5mm;
+        border: 1px solid rgba(201,169,97,.18);
+        pointer-events: none;
+      }
+      .cover-corner {
+        position: absolute;
+        width: 28mm; height: 28mm;
+        background-image:
+          linear-gradient(to right, #c9a961 50%, transparent 50%),
+          linear-gradient(to bottom, #c9a961 50%, transparent 50%);
+        background-size: 12mm 1px, 1px 12mm;
+        background-repeat: no-repeat;
+      }
+      .cover-corner.tl { top: 18mm; left: 18mm; background-position: 0 0, 0 0; }
+      .cover-corner.tr { top: 18mm; right: 18mm; transform: scaleX(-1); }
+      .cover-corner.bl { bottom: 18mm; left: 18mm; transform: scaleY(-1); }
+      .cover-corner.br { bottom: 18mm; right: 18mm; transform: scale(-1, -1); }
+
+      .cover-inner {
+        position: relative;
+        z-index: 2;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: space-between;
+        padding: 44mm 24mm;
+        text-align: center;
+      }
+
+      .cover-top { display: flex; flex-direction: column; align-items: center; }
+      .cover-eyebrow {
+        font-family: 'Cormorant Garamond', serif;
+        font-style: italic;
+        letter-spacing: .55em;
+        text-transform: uppercase;
+        font-size: 11pt;
+        color: #d9bd7c;
+        margin: 0 0 16mm;
+      }
+      .cover-monogram {
+        font-family: 'Italiana', serif;
+        font-size: 64pt;
+        letter-spacing: .35em;
+        text-indent: .35em;
+        color: #c9a961;
+        line-height: 1;
+        margin: 0;
+        text-shadow: 0 4px 18px rgba(201,169,97,.3);
+      }
+      .cover-divider {
+        width: 56mm;
+        margin: 8mm auto 8mm;
+        position: relative;
+        text-align: center;
+        font-family: 'Cormorant Garamond', serif;
+        color: #c9a961;
+        font-size: 18pt;
+      }
+      .cover-divider::before, .cover-divider::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        width: 22mm;
+        height: 1px;
+        background: linear-gradient(to right, transparent, #c9a961);
+      }
+      .cover-divider::before { left: 0; }
+      .cover-divider::after { right: 0; background: linear-gradient(to left, transparent, #c9a961); }
+
+      .cover-couple {
+        font-family: 'Italiana', serif;
+        font-size: 56pt;
+        font-weight: 400;
+        line-height: 1;
+        margin: 0 0 4mm;
+        letter-spacing: .04em;
+      }
+      .cover-couple .amp {
+        color: #c9a961;
+        font-family: 'Cormorant Garamond', serif;
+        font-style: italic;
+        margin: 0 .15em;
+      }
+
+      .cover-middle {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8mm;
+      }
+      .cover-title {
+        font-family: 'Italiana', serif;
+        font-size: 28pt;
+        font-weight: 400;
+        margin: 0;
+        letter-spacing: .03em;
+        color: #f7f4ec;
+      }
+      .cover-period {
+        font-family: 'Cormorant Garamond', serif;
+        font-style: italic;
+        font-size: 16pt;
+        color: #d9bd7c;
+        margin: 0;
+        letter-spacing: .15em;
+      }
+
+      .cover-stats {
+        display: flex;
+        gap: 14mm;
+        margin: 4mm 0 0;
+      }
+      .cover-stat {
+        text-align: center;
+        font-family: 'Cormorant Garamond', serif;
+      }
+      .cover-stat-num {
+        display: block;
+        font-family: 'Italiana', serif;
+        font-size: 26pt;
+        color: #c9a961;
+        line-height: 1;
+      }
+      .cover-stat-label {
+        display: block;
+        font-size: 8pt;
+        letter-spacing: .35em;
+        text-transform: uppercase;
+        color: rgba(247,244,236,.55);
+        margin-top: 3mm;
+      }
+
+      .cover-bottom { display: flex; flex-direction: column; align-items: center; gap: 4mm; }
+      .cover-since {
+        font-family: 'Cormorant Garamond', serif;
+        font-style: italic;
+        font-size: 11pt;
+        letter-spacing: .3em;
+        text-transform: uppercase;
+        color: rgba(247,244,236,.7);
+        margin: 0;
+      }
+      .cover-anniv-date {
+        font-family: 'Italiana', serif;
+        font-size: 22pt;
+        color: #c9a961;
+        letter-spacing: .12em;
+        margin: 0;
+      }
+      .cover-credit {
+        font-family: 'Cormorant Garamond', serif;
+        font-style: italic;
+        font-size: 10pt;
+        color: rgba(247,244,236,.45);
+        margin: 6mm 0 0;
+        letter-spacing: .2em;
+      }
+
+      /* ═══════ TITLE PAGE (inside cover) ═══════ */
+      .title-page {
+        position: relative;
+        width: 210mm; height: 297mm;
+        background: #faf6ec;
+        page-break-after: always;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 40mm 30mm;
+        text-align: center;
+      }
+      .title-page::before {
+        content: '';
+        position: absolute;
+        inset: 14mm;
+        border: 1px solid rgba(10,31,68,.12);
+      }
+      .title-mark {
+        font-family: 'Italiana', serif;
+        font-size: 36pt;
+        letter-spacing: .35em;
+        text-indent: .35em;
+        color: #c9a961;
+        margin: 0 0 10mm;
+      }
+      .title-page h1 {
+        font-family: 'Italiana', serif;
+        font-size: 48pt;
+        font-weight: 400;
+        margin: 0 0 6mm;
+        letter-spacing: .03em;
+        color: #0a1f44;
+      }
+      .title-period {
+        font-family: 'Cormorant Garamond', serif;
+        font-style: italic;
+        font-size: 16pt;
+        color: #c9a961;
+        letter-spacing: .2em;
+        margin: 0 0 14mm;
+      }
+      .title-tagline {
+        font-family: 'Cormorant Garamond', serif;
+        font-style: italic;
+        font-size: 13pt;
+        color: #5a6a8a;
+        max-width: 100mm;
+        line-height: 1.9;
+        margin: 0 auto;
+      }
+      .title-mini-divider {
+        width: 30mm;
+        height: 1px;
+        background: #c9a961;
+        margin: 10mm auto;
+        opacity: .5;
+      }
+      .title-bottom {
+        position: absolute;
+        bottom: 22mm;
+        left: 0; right: 0;
+        text-align: center;
+        font-family: 'Cormorant Garamond', serif;
+        font-style: italic;
+        color: #8896b3;
+        font-size: 10pt;
+        letter-spacing: .3em;
+      }
+
+      /* ═══════ INDEX / TOC ═══════ */
+      .index-page {
+        padding: 28mm 24mm;
+        page-break-after: always;
+      }
+      .index-head {
+        text-align: center;
+        margin-bottom: 12mm;
+      }
+      .index-head h2 {
+        font-family: 'Italiana', serif;
+        font-weight: 400;
+        font-size: 28pt;
+        color: #0a1f44;
+        margin: 0;
+        letter-spacing: .15em;
+      }
+      .index-head .sub {
+        font-family: 'Cormorant Garamond', serif;
+        font-style: italic;
+        font-size: 11pt;
+        color: #c9a961;
+        letter-spacing: .25em;
+        text-transform: uppercase;
+      }
+      .index-divider {
+        width: 28mm;
+        height: 1px;
+        background: #c9a961;
+        margin: 4mm auto 10mm;
+        opacity: .5;
+      }
+      .toc-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      .toc-item {
+        display: flex;
+        align-items: baseline;
+        font-family: 'Cormorant Garamond', serif;
+        font-size: 13pt;
+        margin-bottom: 5mm;
+        color: #1a2645;
+      }
+      .toc-num {
+        display: inline-block;
+        min-width: 16mm;
+        font-family: 'Italiana', serif;
+        font-size: 11pt;
+        color: #c9a961;
+        letter-spacing: .15em;
+      }
+      .toc-title {
+        flex: 1;
+        font-style: italic;
+      }
+      .toc-dots {
+        flex: 0 0 auto;
+        margin: 0 4mm;
+        border-bottom: 1px dotted #c9a961;
+        flex: 1;
+        height: 1px;
+        align-self: flex-end;
+        margin-bottom: 4pt;
+        opacity: .5;
+      }
+      .toc-date {
+        color: #6f7d99;
+        letter-spacing: .1em;
+        font-size: 11pt;
+      }
+
+      /* ═══════ STORY PAGES ═══════ */
+      .story-pages {
+        padding: 22mm 22mm 26mm;
+      }
+      .story {
+        page-break-inside: avoid;
+        padding: 8mm 0 14mm;
+        border-bottom: 1px solid rgba(10,31,68,.08);
+      }
       .story:last-child { border-bottom: none; }
-      .story-meta { font-size: 11px; letter-spacing: .3em; text-transform: uppercase; color: #c9a961; margin-bottom: 4px; }
-      .story h2 { font-family: 'Italiana', serif; font-weight: 400; font-size: 28px; margin: 4px 0 14px; color: #0a1f44; }
-      .story-place { font-size: 12px; color: #888; font-style: italic; margin-bottom: 10px; }
-      .story-text { font-family: 'Cormorant Garamond', serif; font-size: 15px; white-space: pre-wrap; margin-bottom: 12px; }
-      .story-photos { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6mm; margin-top: 10px; }
-      .story-photos img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 4px; }
-      .story-mood { display:inline-block; padding:2px 10px; background:#f7f4ec; border-radius:999px; font-size:11px; color:#999; margin-left:8px }
+      .story-meta {
+        font-family: 'Cormorant Garamond', serif;
+        font-style: italic;
+        font-size: 10pt;
+        letter-spacing: .35em;
+        text-transform: uppercase;
+        color: #c9a961;
+        margin-bottom: 2mm;
+      }
+      .story h2 {
+        font-family: 'Italiana', serif;
+        font-weight: 400;
+        font-size: 24pt;
+        margin: 1mm 0 4mm;
+        color: #0a1f44;
+        letter-spacing: .02em;
+      }
+      .story-place {
+        font-size: 10pt;
+        color: #888;
+        font-style: italic;
+        margin-bottom: 4mm;
+        font-family: 'Cormorant Garamond', serif;
+        letter-spacing: .1em;
+      }
+      .story-text {
+        font-family: 'Cormorant Garamond', serif;
+        font-size: 13pt;
+        white-space: pre-wrap;
+        margin-bottom: 6mm;
+        color: #2a3a5a;
+        line-height: 1.85;
+      }
+      .story-photos {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 4mm;
+        margin-top: 4mm;
+      }
+      .story-photos img {
+        width: 100%;
+        aspect-ratio: 4/3;
+        object-fit: cover;
+        border-radius: 1mm;
+        border: 1px solid rgba(10,31,68,.08);
+      }
+      .story-mood {
+        display: inline-block;
+        padding: 1mm 4mm;
+        background: #f7f4ec;
+        border: 1px solid rgba(201,169,97,.3);
+        border-radius: 999px;
+        font-size: 10pt;
+        color: #8a7647;
+        margin-left: 3mm;
+        font-family: 'Cormorant Garamond', serif;
+        letter-spacing: .08em;
+        font-style: italic;
+        vertical-align: middle;
+      }
+
+      /* ═══════ BACK PAGE ═══════ */
+      .back-page {
+        position: relative;
+        width: 210mm; height: 297mm;
+        background: linear-gradient(165deg, #122a5e 0%, #0a1f44 100%);
+        color: #f7f4ec;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 40mm 30mm;
+        text-align: center;
+      }
+      .back-page::before {
+        content: '';
+        position: absolute;
+        inset: 12mm;
+        border: 1px solid rgba(232,216,176,.3);
+      }
+      .back-mark {
+        font-family: 'Italiana', serif;
+        font-size: 28pt;
+        letter-spacing: .35em;
+        color: #c9a961;
+        margin: 0 0 8mm;
+      }
+      .back-quote {
+        font-family: 'Cormorant Garamond', serif;
+        font-style: italic;
+        font-size: 16pt;
+        color: rgba(247,244,236,.85);
+        max-width: 110mm;
+        line-height: 1.9;
+        margin: 0 0 12mm;
+      }
+      .back-credit {
+        font-family: 'Cormorant Garamond', serif;
+        font-style: italic;
+        font-size: 11pt;
+        color: rgba(247,244,236,.5);
+        letter-spacing: .25em;
+        margin: 0;
+      }
     </style>
   `;
 
   let html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(book.title)}</title>${css}</head><body>`;
 
+  // ───── COVER PAGE ─────
   html += `
-    <div class="cover">
-      <div class="cover-mark">S · R</div>
-      <h1>${escapeHtml(book.title)}</h1>
-      <p>since · 08 · 01 · 2021</p>
-      <p style="margin-top:30px">made with ♥</p>
+    <div class="cover-page">
+      <div class="cover-corner tl"></div>
+      <div class="cover-corner tr"></div>
+      <div class="cover-corner bl"></div>
+      <div class="cover-corner br"></div>
+
+      <div class="cover-inner">
+        <div class="cover-top">
+          <p class="cover-eyebrow">our private diary</p>
+          <h1 class="cover-monogram">S · R</h1>
+          <div class="cover-divider">❦</div>
+          <h2 class="cover-couple">Safe<span class="amp">&amp;</span>Ruang</h2>
+        </div>
+
+        <div class="cover-middle">
+          <p class="cover-title">Our Story</p>
+          <p class="cover-period">${escapeHtml(yearRange)}</p>
+          <div class="cover-stats">
+            <div class="cover-stat">
+              <span class="cover-stat-num">${stories.length}</span>
+              <span class="cover-stat-label">stories</span>
+            </div>
+            <div class="cover-stat">
+              <span class="cover-stat-num">${totalPhotos}</span>
+              <span class="cover-stat-label">photos</span>
+            </div>
+            <div class="cover-stat">
+              <span class="cover-stat-num">${years.length}</span>
+              <span class="cover-stat-label">${years.length === 1 ? 'year' : 'years'}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="cover-bottom">
+          <p class="cover-since">— since —</p>
+          <p class="cover-anniv-date">08 · 01 · 2021</p>
+          <p class="cover-credit">a love letter, bound</p>
+        </div>
+      </div>
     </div>
   `;
 
+  // ───── TITLE PAGE ─────
+  html += `
+    <div class="title-page">
+      <div class="title-mark">S · R</div>
+      <h1>Our Story</h1>
+      <p class="title-period">${escapeHtml(yearRange)}</p>
+      <div class="title-mini-divider"></div>
+      <p class="title-tagline">
+        "ทุกเดือนที่ผ่านไป<br/>
+        คือเรื่องเล่าที่ไม่อยากให้หาย<br/>
+        จึงเก็บไว้ในเล่มนี้ — ให้เธอ"
+      </p>
+      <div class="title-bottom">made with ♥ · printed ${new Date().toLocaleDateString('th-TH', {year:'numeric', month:'long'})}</div>
+    </div>
+  `;
+
+  // ───── INDEX / TOC ─────
+  if (stories.length > 0){
+    html += `
+      <div class="index-page">
+        <div class="index-head">
+          <p class="sub">— contents —</p>
+          <h2>สารบัญ</h2>
+          <div class="index-divider"></div>
+        </div>
+        <ul class="toc-list">
+          ${stories.map((s, i)=>`
+            <li class="toc-item">
+              <span class="toc-num">${String(i+1).padStart(2,'0')}</span>
+              <span class="toc-title">${escapeHtml(s.title)}</span>
+              <span class="toc-dots"></span>
+              <span class="toc-date">${monthsShort[s.month]} ${s.year}</span>
+            </li>
+          `).join('')}
+        </ul>
+      </div>
+    `;
+  }
+
+  // ───── STORY PAGES ─────
+  html += `<div class="story-pages">`;
   for (const s of stories){
     const photos = getStoryPhotos(s.id);
     const moodTxt = s.mood ? ` <span class="story-mood">${MOOD_EMOJI[s.mood]||''} ${s.mood}</span>` : '';
@@ -1874,7 +2397,7 @@ function buildBookHTML(book){
       <div class="story">
         <div class="story-meta">${monthsTH[s.month]} · ${s.year} · by ${escapeHtml(s.author||'')}</div>
         <h2>${escapeHtml(s.title)}${moodTxt}</h2>
-        ${s.place ? `<div class="story-place">📍 ${escapeHtml(s.place)}</div>` : ''}
+        ${s.place ? `<div class="story-place">— ${escapeHtml(s.place)} —</div>` : ''}
         <div class="story-text">${escapeHtml(s.text||'')}</div>
         ${photos.length > 0 ? `<div class="story-photos">${photos.slice(0,4).map(p=>{
           const src = p.drive_id ? driveImageUrl(p.drive_id) : (p.dataURL||'');
@@ -1883,6 +2406,20 @@ function buildBookHTML(book){
       </div>
     `;
   }
+  html += `</div>`;
+
+  // ───── BACK PAGE ─────
+  html += `
+    <div class="back-page">
+      <div class="back-mark">S · R</div>
+      <p class="back-quote">
+        "นับเดือนได้<br/>
+        แต่ความรู้สึกที่มีให้กัน<br/>
+        นับไม่ได้หรอก"
+      </p>
+      <p class="back-credit">— end of volume —</p>
+    </div>
+  `;
 
   html += '</body></html>';
   return html;
