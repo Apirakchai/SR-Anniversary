@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#0a1f44" />
+<title>Safe & Ruang · Our Story</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Sarabun:wght@300;400;500;600;700&family=Italiana&family=Noto+Serif+Thai:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+<link rel="stylesheet" href="style.css" />
+
+<!-- Google Identity Services -->
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<!-- Google API client -->
+<script src="https://apis.google.com/js/api.js" async defer></script>
+</head>
+<body>
+
+<!-- ░░░░░░░░░░░░░░░░  LOGIN SCREEN  ░░░░░░░░░░░░░░░░ -->
+<section id="loginScreen" class="screen login-screen active">
+  <div class="login-bg">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+
+  <div class="login-card">
+    <div class="brand">
+      <div class="brand-mark">S &nbsp;·&nbsp; R</div>
+      <div class="brand-line"></div>
+      <p class="brand-tag">Since · 08 · 01 · 2021</p>
+    </div>
+
+    <h1 class="login-title">Our Private Diary</h1>
+    <p class="login-sub">เลือกชื่อของคุณ แล้วใส่รหัสที่เรารู้กันสองคน</p>
+
+    <div class="user-pick">
+      <button class="user-btn" data-user="Safe">
+        <span class="user-avatar">S</span>
+        <span class="user-name">Safe</span>
+      </button>
+      <button class="user-btn" data-user="Ruang">
+        <span class="user-avatar">R</span>
+        <span class="user-name">Ruang</span>
+      </button>
+    </div>
+
+    <div class="pin-wrap">
+      <input type="password" id="pinInput" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="• • • • • •" autocomplete="off" />
+      <button id="loginBtn" class="login-go">เข้าสู่ความทรงจำของเรา</button>
+      <p id="loginError" class="login-error"></p>
+    </div>
+
+    <p class="login-foot">made with ♥ for Ruang</p>
+  </div>
+</section>
+
+
+<!-- ░░░░░░░░░░░░░░░░  MAIN APP  ░░░░░░░░░░░░░░░░ -->
+<section id="appScreen" class="screen app-screen">
+
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="logo-mark">S · R</div>
+      <div class="logo-meta">
+        <span id="welcomeUser">welcome</span>
+        <span class="dot">·</span>
+        <span id="daysTogether">— days together</span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <button id="syncBtn" class="icon-btn" title="Sync with Google">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M3 21v-5h5"/></svg>
+        <span class="sync-label">Sync</span>
+      </button>
+      <button id="logoutBtn" class="icon-btn" title="Logout">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Hero / Counter -->
+  <section class="hero">
+    <div class="hero-overlay"></div>
+    <div class="hero-content">
+      <p class="hero-eyebrow">— our anniversary —</p>
+      <h2 class="hero-couple">Safe <span class="amp">&amp;</span> Ruang</h2>
+      <div class="hero-counter">
+        <div class="count-block"><span id="cYears">0</span><em>years</em></div>
+        <div class="count-block"><span id="cMonths">0</span><em>months</em></div>
+        <div class="count-block"><span id="cDays">0</span><em>days</em></div>
+      </div>
+      <div class="hero-next">
+        <span class="next-label">next monthiversary in</span>
+        <span id="nextCount" class="next-count">— days</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Toolbar -->
+  <nav class="toolbar">
+    <button class="tab active" data-tab="timeline">📖 Timeline</button>
+    <button class="tab" data-tab="add">＋ เพิ่มเดือนใหม่</button>
+    <button class="tab" data-tab="settings">⚙ Settings</button>
+  </nav>
+
+  <!-- TAB: TIMELINE -->
+  <section id="tab-timeline" class="tab-panel active">
+    <div class="timeline-head">
+      <h3>Our Monthly Memories</h3>
+      <p id="storyCount" class="muted">— stories</p>
+    </div>
+    <div id="timeline" class="timeline"></div>
+    <div id="emptyState" class="empty-state hidden">
+      <div class="empty-art">♡</div>
+      <p>ยังไม่มีเรื่องราวเลยนะ<br/>มาเริ่มเก็บความทรงจำเดือนแรกกันเถอะ</p>
+      <button class="btn-primary" data-go="add">เพิ่มเรื่องราวแรก</button>
+    </div>
+  </section>
+
+  <!-- TAB: ADD -->
+  <section id="tab-add" class="tab-panel">
+    <div class="form-card">
+      <h3 id="formTitle">เพิ่มเรื่องราวเดือนใหม่</h3>
+      <form id="storyForm" autocomplete="off">
+        <input type="hidden" id="storyId" />
+
+        <div class="field">
+          <label>เดือน / ปี</label>
+          <div class="row">
+            <select id="storyMonth"></select>
+            <input type="number" id="storyYear" min="2021" max="2099" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label>หัวข้อ <span class="hint">(เช่น "เดือนแรกที่ได้เจอกัน")</span></label>
+          <input type="text" id="storyTitle" maxlength="120" required />
+        </div>
+
+        <div class="field">
+          <label>เรื่องราว / จดหมายรัก</label>
+          <textarea id="storyText" rows="6" placeholder="เขียนสิ่งที่อยากบอก..."></textarea>
+        </div>
+
+        <div class="field">
+          <label>สถานที่ <span class="hint">(ไม่จำเป็น)</span></label>
+          <input type="text" id="storyPlace" maxlength="120" />
+        </div>
+
+        <div class="field">
+          <label>รูปภาพ <span class="hint">(เลือกได้หลายรูป — เก็บใน Google Drive)</span></label>
+          <div class="upload-area" id="uploadArea">
+            <input type="file" id="storyPhotos" accept="image/*" multiple hidden />
+            <div class="upload-inner">
+              <div class="upload-icon">📷</div>
+              <p>แตะเพื่อเลือกรูป หรือลากมาวาง</p>
+              <small id="uploadHint">รูปจะอัปโหลดขึ้น Google Drive ของคุณตอนกด "บันทึก"</small>
+            </div>
+          </div>
+          <div id="photoPreview" class="photo-preview"></div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" id="cancelEdit" class="btn-ghost">ยกเลิก</button>
+          <button type="submit" class="btn-primary">💾 บันทึก</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <!-- TAB: SETTINGS -->
+  <section id="tab-settings" class="tab-panel">
+    <div class="settings-card">
+      <h3>Google Sync</h3>
+      <p class="muted">เชื่อมต่อกับ Google Sheets + Drive เพื่อเก็บข้อมูลและรูปภาพไว้ที่เดียว เข้าจากเครื่องไหนก็เห็นเหมือนกัน</p>
+
+      <div class="setting-row">
+        <span>สถานะ:</span>
+        <span id="googleStatus" class="status-pill off">ยังไม่ได้เชื่อมต่อ</span>
+      </div>
+
+      <div class="setting-row">
+        <span>Spreadsheet ID:</span>
+        <code id="sheetIdDisplay" class="muted small">—</code>
+      </div>
+
+      <div class="setting-actions">
+        <button id="googleConnectBtn" class="btn-primary">🔗 เชื่อมต่อ Google</button>
+        <button id="googleSyncNow" class="btn-ghost">⟳ Sync ตอนนี้</button>
+        <button id="googleDisconnect" class="btn-ghost danger">ตัดการเชื่อมต่อ</button>
+      </div>
+
+      <hr/>
+
+      <h3>Setup ครั้งแรก</h3>
+      <p class="muted small">
+        ต้องตั้งค่า Google API Client ID ก่อนใช้งาน — ทำครั้งเดียวเท่านั้น<br/>
+        วิธีตั้งค่าอยู่ในไฟล์ <code>SETUP.md</code> ใน repo
+      </p>
+
+      <div class="field">
+        <label>Google Client ID</label>
+        <input type="text" id="clientIdInput" placeholder="xxxxxxxx.apps.googleusercontent.com" />
+      </div>
+      <div class="field">
+        <label>Google API Key</label>
+        <input type="text" id="apiKeyInput" placeholder="AIza..." />
+      </div>
+      <button id="saveCreds" class="btn-primary">บันทึก credentials</button>
+
+      <hr/>
+
+      <h3>Local Data</h3>
+      <p class="muted small">ข้อมูลถูกเก็บไว้ในเครื่องด้วย เพื่อให้เปิดดูได้แม้ไม่มีเน็ต</p>
+      <div class="setting-actions">
+        <button id="exportBtn" class="btn-ghost">⬇ Export JSON</button>
+        <button id="importBtn" class="btn-ghost">⬆ Import JSON</button>
+        <input type="file" id="importFile" accept="application/json" hidden />
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="foot">
+    <span>Safe ♥ Ruang · since 08·01·2021</span>
+  </footer>
+</section>
+
+
+<!-- ░░░░░░░░░░░░░░░░  STORY VIEWER MODAL  ░░░░░░░░░░░░░░░░ -->
+<div id="storyModal" class="modal hidden">
+  <div class="modal-backdrop"></div>
+  <div class="modal-body">
+    <button class="modal-close" id="modalClose">✕</button>
+    <div id="modalContent"></div>
+  </div>
+</div>
+
+
+<!-- ░░░░░░░░░░░░░░░░  ANNIVERSARY SURPRISE  ░░░░░░░░░░░░░░░░ -->
+<div id="anniversary" class="anniv hidden">
+  <canvas id="confettiCanvas"></canvas>
+  <div class="anniv-card">
+    <div class="anniv-eyebrow">today is special</div>
+    <h2 class="anniv-title">Happy <span id="annivMonths">—</span><sup>th</sup><br/>Monthiversary 💌</h2>
+    <p class="anniv-msg" id="annivMsg">— a love letter for you —</p>
+    <div class="anniv-meta"><span id="annivDate"></span></div>
+    <button id="annivClose" class="anniv-btn">เปิดอ่าน ♥</button>
+  </div>
+</div>
+
+<!-- Floating heart particle layer (during anniversary day) -->
+<div id="heartLayer" class="heart-layer"></div>
+
+<!-- Toast notifications -->
+<div id="toast" class="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
