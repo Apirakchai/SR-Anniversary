@@ -6,8 +6,8 @@
 // CONFIG  ← ใส่ Client ID + API Key ตรงนี้
 // ───────────────────────────────────────────────
 const CONFIG = {
-  GOOGLE_CLIENT_ID: '462797314829-vscbflu69udrbepsr089dsrul0s6utmc.apps.googleusercontent.com',
-  GOOGLE_API_KEY:   'AIzaSyAf4J37Gxs8XP2iLDjpxX-1orCz7jddauM',
+  GOOGLE_CLIENT_ID: 'PASTE_YOUR_CLIENT_ID_HERE',
+  GOOGLE_API_KEY:   'PASTE_YOUR_API_KEY_HERE',
 
   PASSWORD_HASH: '118d7c585c0ca03cd5fbeb837481aa07cdf151b94714c3a90d4b28ee560540a7',
 
@@ -578,15 +578,22 @@ function renderPhotoPreview(){
 function getPhotoSrc(photo){
   // Prefer stored thumbnailLink (works without auth, with token), fall back to ID-based URL, then dataURL
   if (!photo) return '';
-  if (photo.thumbnail_url) return photo.thumbnail_url;
+  if (photo.thumbnail_url) return upgradeThumbnailRes(photo.thumbnail_url);
   if (photo.dataURL) return photo.dataURL;
   if (photo.drive_id) return driveImageUrl(photo.drive_id); // legacy fallback
   return '';
 }
 
+function upgradeThumbnailRes(url, size = 1600){
+  // Drive thumbnailLink comes back as ".../=s220" by default — upgrade for retina
+  if (!url) return url;
+  // Replace =s### or =w### with =s{size} for higher resolution
+  return url.replace(/=[swh]\d+(-[a-z]+)?$/, `=s${size}`);
+}
+
 function driveImageUrl(driveId){
   // Legacy fallback URL — may not always work but kept for backwards compat
-  return `https://drive.google.com/thumbnail?id=${driveId}&sz=w800`;
+  return `https://drive.google.com/thumbnail?id=${driveId}&sz=w1600`;
 }
 
 function driveAudioUrl(driveId){
