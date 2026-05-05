@@ -6,8 +6,8 @@
 // CONFIG  ← ใส่ Client ID + API Key ตรงนี้
 // ───────────────────────────────────────────────
 const CONFIG = {
-  GOOGLE_CLIENT_ID: '462797314829-vscbflu69udrbepsr089dsrul0s6utmc.apps.googleusercontent.com',
-  GOOGLE_API_KEY:   'AIzaSyAf4J37Gxs8XP2iLDjpxX-1orCz7jddauM',
+  GOOGLE_CLIENT_ID: 'PASTE_YOUR_CLIENT_ID_HERE',
+  GOOGLE_API_KEY:   'PASTE_YOUR_API_KEY_HERE',
 
   PASSWORD_HASH: '118d7c585c0ca03cd5fbeb837481aa07cdf151b94714c3a90d4b28ee560540a7',
 
@@ -86,6 +86,7 @@ let state = {
   selectedMood: null,
   selectedCapsuleMonths: null,
   recordingState: { mediaRecorder: null, chunks: [], startTime: 0, timer: null },
+  filters: { year:'', month:'', day:'', mood:'', search:'' },
   google: {
     tokenClient: null,
     accessToken: null,
@@ -229,6 +230,7 @@ function initApp(){
   initLogout();
   initTypingDetector();
   initSearch();
+  initFilters();
   initThemeToggle();
   initMusicToggle();
   initCapsule();
@@ -449,7 +451,7 @@ function checkOnThisDay(){
 // TYPING DETECTOR
 // ───────────────────────────────────────────────
 function initTypingDetector(){
-  const inputs = ['#storyTitle', '#storyText', '#storyPlace', '#storyMonth', '#storyYear',
+  const inputs = ['#storyTitle', '#storyText', '#storyPlace', '#storyMonth', '#storyYear', '#storyDay',
                   '#capsuleTitle', '#capsuleText'];
   inputs.forEach(sel=>{
     const el = $(sel); if (!el) return;
@@ -484,6 +486,26 @@ function initForm(){
   sel.value = now.getMonth()+1;
   $('#storyYear').value = now.getFullYear();
 
+  // Populate day dropdown based on month/year
+  const populateDays = ()=>{
+    const m = parseInt($('#storyMonth').value, 10);
+    const y = parseInt($('#storyYear').value, 10);
+    const dayCount = (m && y) ? new Date(y, m, 0).getDate() : 31;
+    const daySel = $('#storyDay');
+    const cur = daySel.value;
+    daySel.innerHTML = '<option value="">— ไม่ระบุ —</option>';
+    for (let d=1; d<=dayCount; d++){
+      const opt = document.createElement('option');
+      opt.value = d; opt.textContent = d;
+      daySel.appendChild(opt);
+    }
+    // Restore previous if still valid
+    if (cur && parseInt(cur,10) <= dayCount) daySel.value = cur;
+  };
+  populateDays();
+  $('#storyMonth').addEventListener('change', populateDays);
+  $('#storyYear').addEventListener('change', populateDays);
+
   const area = $('#uploadArea');
   const input = $('#storyPhotos');
   area.addEventListener('click', ()=>input.click());
@@ -512,6 +534,7 @@ function resetForm(){
   $('#storyTitle').value = '';
   $('#storyText').value = '';
   $('#storyPlace').value = '';
+  $('#storyDay').value = '';
   $('#photoPreview').innerHTML = '';
   $('#formTitle').textContent = 'เพิ่มเรื่องราวเดือนใหม่';
   $$('.mood-btn').forEach(b=>b.classList.remove('active'));
@@ -519,6 +542,7 @@ function resetForm(){
   const now = new Date();
   $('#storyMonth').value = now.getMonth()+1;
   $('#storyYear').value = now.getFullYear();
+  $('#storyMonth').dispatchEvent(new Event('change')); // trigger day dropdown
 }
 
 function handleFiles(fileList){
@@ -683,6 +707,8 @@ async function onSaveStory(e){
   const id = $('#storyId').value || uid('st');
   const month = parseInt($('#storyMonth').value, 10);
   const year = parseInt($('#storyYear').value, 10);
+  const dayVal = $('#storyDay').value;
+  const day = dayVal ? parseInt(dayVal, 10) : null;
   const title = $('#storyTitle').value.trim();
   const text = $('#storyText').value.trim();
   const place = $('#storyPlace').value.trim();
@@ -728,7 +754,7 @@ async function onSaveStory(e){
   state.photos = state.photos.filter(p=>p.story_id !== id).concat(newPhotos);
 
   const story = {
-    id, month, year, title, text, place, mood,
+    id, month, year, day, title, text, place, mood,
     voice_drive_id: voiceDriveId || '',
     author: state.user,
     updatedAt: new Date().toISOString(),
@@ -738,7 +764,7 @@ async function onSaveStory(e){
   if (existing >= 0) state.stories[existing] = story;
   else state.stories.push(story);
 
-  state.stories.sort((a,b)=> (b.year - a.year) || (b.month - a.month));
+  state.stories.sort((a,b)=> (b.year - a.year) || (b.month - a.month) || ((b.day||0) - (a.day||0)));
   saveLS(LS.STORIES, state.stories);
   saveLS(LS.PHOTOS, state.photos);
 
@@ -750,18 +776,135 @@ async function onSaveStory(e){
   resetForm();
   renderAll();
   renderYearView();
+  refreshFilterOptions();
   switchTab('timeline');
   toast('บันทึกเรียบร้อย ♥', 'success');
 }
 
 
 // ───────────────────────────────────────────────
-// SEARCH
+// SEARCH + FILTERS
 // ───────────────────────────────────────────────
 function initSearch(){
   $('#searchInput').addEventListener('input', e=>{
-    renderAll(e.target.value.trim().toLowerCase());
+    state.filters.search = e.target.value.trim().toLowerCase();
+    applyFiltersAndRender();
   });
+}
+
+function initFilters(){
+  $('#filterToggle').addEventListener('click', ()=>{
+    $('#filterPanel').classList.toggle('hidden');
+  });
+  $('#filterClose').addEventListener('click', ()=>$('#filterPanel').classList.add('hidden'));
+
+  $('#filterClear').addEventListener('click', ()=>{
+    state.filters.year = '';
+    state.filters.month = '';
+    state.filters.day = '';
+    state.filters.mood = '';
+    $('#filterYear').value = '';
+    $('#filterMonth').value = '';
+    $('#filterDay').value = '';
+    $$('.filter-mood').forEach(b => b.classList.toggle('active', b.dataset.mood === ''));
+    repopulateFilterDays();
+    applyFiltersAndRender();
+  });
+
+  ['#filterYear', '#filterMonth', '#filterDay'].forEach(sel => {
+    $(sel).addEventListener('change', e=>{
+      const key = sel.replace('#filter','').toLowerCase();
+      state.filters[key] = e.target.value;
+      if (sel === '#filterYear' || sel === '#filterMonth') repopulateFilterDays();
+      applyFiltersAndRender();
+    });
+  });
+
+  $$('.filter-mood').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      $$('.filter-mood').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      state.filters.mood = btn.dataset.mood;
+      applyFiltersAndRender();
+    });
+  });
+
+  refreshFilterOptions();
+}
+
+function refreshFilterOptions(){
+  // Populate years from existing stories
+  const years = [...new Set(state.stories.map(s => s.year).filter(y => y))].sort((a,b)=>b-a);
+  const yearSel = $('#filterYear');
+  const cur = yearSel.value;
+  yearSel.innerHTML = '<option value="">ทุกปี</option>' +
+    years.map(y => `<option value="${y}">${y}</option>`).join('');
+  if (cur) yearSel.value = cur;
+  repopulateFilterDays();
+}
+
+function repopulateFilterDays(){
+  const y = parseInt(state.filters.year, 10);
+  const m = parseInt(state.filters.month, 10);
+  let dayCount = 31;
+  if (y && m) dayCount = new Date(y, m, 0).getDate();
+  else if (m) dayCount = [31,29,31,30,31,30,31,31,30,31,30,31][m-1] || 31;
+
+  const sel = $('#filterDay');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">ทุกวัน</option>';
+  for (let d=1; d<=dayCount; d++){
+    sel.innerHTML += `<option value="${d}">วันที่ ${d}</option>`;
+  }
+  if (cur && parseInt(cur,10) <= dayCount) sel.value = cur;
+  else { sel.value = ''; state.filters.day = ''; }
+}
+
+function countActiveFilters(){
+  let n = 0;
+  if (state.filters.year) n++;
+  if (state.filters.month) n++;
+  if (state.filters.day) n++;
+  if (state.filters.mood) n++;
+  return n;
+}
+
+function updateFilterBadge(){
+  const n = countActiveFilters();
+  const badge = $('#filterBadge');
+  const toggle = $('#filterToggle');
+  if (n > 0){
+    badge.textContent = n;
+    badge.classList.remove('hidden');
+    toggle.classList.add('active');
+  } else {
+    badge.classList.add('hidden');
+    toggle.classList.remove('active');
+  }
+}
+
+function applyFilters(stories){
+  return stories.filter(s => {
+    if (state.filters.year   && s.year != state.filters.year) return false;
+    if (state.filters.month  && s.month != state.filters.month) return false;
+    if (state.filters.day    && (s.day == null || s.day != state.filters.day)) return false;
+    if (state.filters.mood   && s.mood !== state.filters.mood) return false;
+    if (state.filters.search){
+      const q = state.filters.search;
+      if (!(
+        (s.title||'').toLowerCase().includes(q) ||
+        (s.text||'').toLowerCase().includes(q) ||
+        (s.place||'').toLowerCase().includes(q) ||
+        (s.author||'').toLowerCase().includes(q)
+      )) return false;
+    }
+    return true;
+  });
+}
+
+function applyFiltersAndRender(){
+  updateFilterBadge();
+  renderAll();
 }
 
 
@@ -770,19 +913,11 @@ function initSearch(){
 // ───────────────────────────────────────────────
 function getStoryPhotos(storyId){ return state.photos.filter(p=>p.story_id === storyId); }
 
-function renderAll(filterQuery=''){
+function renderAll(){
   const list = $('#timeline');
   const empty = $('#emptyState');
 
-  let stories = state.stories;
-  if (filterQuery){
-    stories = stories.filter(s =>
-      (s.title||'').toLowerCase().includes(filterQuery) ||
-      (s.text||'').toLowerCase().includes(filterQuery) ||
-      (s.place||'').toLowerCase().includes(filterQuery) ||
-      (s.author||'').toLowerCase().includes(filterQuery)
-    );
-  }
+  const stories = applyFilters(state.stories);
 
   if (state.stories.length === 0){
     list.innerHTML = '';
@@ -791,12 +926,14 @@ function renderAll(filterQuery=''){
     return;
   }
   empty.classList.add('hidden');
-  if (filterQuery && stories.length === 0){
-    list.innerHTML = `<p class="muted" style="grid-column:1/-1;text-align:center;padding:40px">ไม่พบ "${escapeHtml(filterQuery)}" ในเรื่องราวใด ๆ</p>`;
+
+  const hasActiveFilter = state.filters.search || countActiveFilters() > 0;
+  if (hasActiveFilter && stories.length === 0){
+    list.innerHTML = `<p class="muted" style="grid-column:1/-1;text-align:center;padding:40px">ไม่พบเรื่องราวที่ตรงกับ filter</p>`;
     $('#storyCount').textContent = `0 / ${state.stories.length}`;
     return;
   }
-  $('#storyCount').textContent = filterQuery
+  $('#storyCount').textContent = hasActiveFilter
     ? `${stories.length} / ${state.stories.length}`
     : `${state.stories.length} stor${state.stories.length===1?'y':'ies'}`;
 
@@ -807,11 +944,14 @@ function renderAll(filterQuery=''){
     const photos = getStoryPhotos(s.id);
     const cover = photos[0] ? (photos[0].drive_id ? driveImageUrl(photos[0].drive_id) : photos[0].dataURL) : null;
     const moodEmoji = s.mood ? MOOD_EMOJI[s.mood] || '' : '';
+    const dateLabel = s.day
+      ? `${s.day} ${monthsTH[s.month]} · ${s.year}`
+      : `${monthsTH[s.month]} · ${s.year}`;
     return `
       <article class="story-card" data-id="${s.id}">
         <div class="story-cover ${cover ? '' : 'placeholder'}">
           ${cover ? `<img src="${cover}" alt="" loading="lazy"/>` : ''}
-          <div class="story-month-tag">${monthsTH[s.month]} · ${s.year}</div>
+          <div class="story-month-tag">${dateLabel}</div>
           ${moodEmoji ? `<div class="story-mood-emoji">${moodEmoji}</div>` : ''}
         </div>
         <div class="story-body">
@@ -936,7 +1076,7 @@ function openStory(id){
       ${moodEmoji ? `<div class="mc-mood-emoji">${moodEmoji}</div>` : ''}
     </div>
     <div class="mc-body">
-      <p class="mc-eyebrow">${monthsFull[s.month]} ${s.year}</p>
+      <p class="mc-eyebrow">${s.day ? `${s.day} ` : ''}${monthsFull[s.month]} ${s.year}</p>
       <h2 class="mc-title">${escapeHtml(s.title)}</h2>
       <div class="mc-meta">
         <span>by ${escapeHtml(s.author || '—')}</span>
@@ -975,6 +1115,8 @@ function editStory(id){
   $('#storyId').value = s.id;
   $('#storyMonth').value = s.month;
   $('#storyYear').value = s.year;
+  $('#storyMonth').dispatchEvent(new Event('change')); // populate days for this month
+  $('#storyDay').value = s.day || '';
   $('#storyTitle').value = s.title;
   $('#storyText').value = s.text || '';
   $('#storyPlace').value = s.place || '';
@@ -1005,6 +1147,7 @@ async function deleteStory(id){
   closeModal();
   renderAll();
   renderYearView();
+  refreshFilterOptions();
   toast('ลบแล้ว');
 }
 
@@ -1323,22 +1466,70 @@ async function ensureRequiredTabs(existingTabs){
     }
   }
 
-  if (missing.length === 0 && renames.length === 0) return;
+  if (missing.length > 0 || renames.length > 0){
+    const requests = [
+      ...renames,
+      ...missing.map(title => ({ addSheet: { properties: { title } } })),
+    ];
+    await gapi.client.sheets.spreadsheets.batchUpdate({
+      spreadsheetId: state.google.sheetId,
+      resource: { requests },
+    });
+  }
 
-  const requests = [
-    ...renames,
-    ...missing.map(title => ({ addSheet: { properties: { title } } })),
-  ];
-  await gapi.client.sheets.spreadsheets.batchUpdate({
-    spreadsheetId: state.google.sheetId,
-    resource: { requests },
-  });
+  // Always check if Stories tab has the new "day" column header — if not, migrate
+  await migrateStoriesSchema();
+
+  // Always rewrite headers to ensure they're up to date
   await writeHeaders();
+}
+
+async function migrateStoriesSchema(){
+  // Check current header row of Stories
+  try {
+    const r = await gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId: state.google.sheetId,
+      range: `${CONFIG.TAB_STORIES}!A1:K1`,
+    });
+    const headers = r.result.values?.[0] || [];
+    // If column D (index 3) is NOT 'day' — old schema → need to migrate
+    if (headers[3] !== 'day' && headers.length > 3){
+      console.log('Migrating Stories schema: inserting day column at index 3');
+      // Read all existing data rows
+      const allRows = await gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId: state.google.sheetId,
+        range: `${CONFIG.TAB_STORIES}!A2:J`,  // old schema had 10 cols
+      });
+      const oldRows = allRows.result.values || [];
+      // Insert empty day column at index 3
+      const newRows = oldRows.map(row => {
+        const r = [...row];
+        r.splice(3, 0, ''); // insert empty day at position 3
+        return r;
+      });
+      // Clear and rewrite
+      await gapi.client.sheets.spreadsheets.values.clear({
+        spreadsheetId: state.google.sheetId,
+        range: `${CONFIG.TAB_STORIES}!A2:K`,
+      });
+      if (newRows.length){
+        await gapi.client.sheets.spreadsheets.values.update({
+          spreadsheetId: state.google.sheetId,
+          range: `${CONFIG.TAB_STORIES}!A2`,
+          valueInputOption: 'RAW',
+          resource: { values: newRows },
+        });
+      }
+      console.log(`Migrated ${newRows.length} stories with empty day column`);
+    }
+  } catch(e){
+    console.warn('Schema migration check failed (might be empty sheet):', e);
+  }
 }
 
 async function writeHeaders(){
   const updates = [
-    {range: `${CONFIG.TAB_STORIES}!A1:J1`, values: [['id','year','month','title','text','place','author','mood','voice_drive_id','updatedAt']]},
+    {range: `${CONFIG.TAB_STORIES}!A1:K1`, values: [['id','year','month','day','title','text','place','author','mood','voice_drive_id','updatedAt']]},
     {range: `${CONFIG.TAB_PHOTOS}!A1:E1`,  values: [['id','story_id','drive_id','name','dataURL_fallback']]},
     {range: `${CONFIG.TAB_BACKUPS}!A1:D1`, values: [['date','timestamp','story_count','snapshot_json']]},
     {range: `${CONFIG.TAB_CAPSULES}!A1:F1`,values: [['id','title','text','author','createdAt','openAt']]},
@@ -1381,7 +1572,7 @@ async function pullFromSheet(){
 
   try {
     const [storyRows, photoRows, capsuleRows] = await Promise.all([
-      safeGet(`${CONFIG.TAB_STORIES}!A2:J`),
+      safeGet(`${CONFIG.TAB_STORIES}!A2:K`),
       safeGet(`${CONFIG.TAB_PHOTOS}!A2:E`),
       safeGet(`${CONFIG.TAB_CAPSULES}!A2:F`),
     ]);
@@ -1390,13 +1581,14 @@ async function pullFromSheet(){
       id: r[0],
       year: parseInt(r[1],10),
       month: parseInt(r[2],10),
-      title: r[3] || '',
-      text: r[4] || '',
-      place: r[5] || '',
-      author: r[6] || '',
-      mood: r[7] || '',
-      voice_drive_id: r[8] || '',
-      updatedAt: r[9] || '',
+      day: r[3] ? parseInt(r[3],10) : null,
+      title: r[4] || '',
+      text: r[5] || '',
+      place: r[6] || '',
+      author: r[7] || '',
+      mood: r[8] || '',
+      voice_drive_id: r[9] || '',
+      updatedAt: r[10] || '',
     })).filter(s=>s.id);
 
     const remotePhotos = photoRows.map(r=>({
@@ -1418,7 +1610,7 @@ async function pullFromSheet(){
     })).filter(c=>c.id);
 
     state.stories = mergeStories(state.stories, remoteStories);
-    state.stories.sort((a,b)=> (b.year - a.year) || (b.month - a.month));
+    state.stories.sort((a,b)=> (b.year - a.year) || (b.month - a.month) || ((b.day||0) - (a.day||0)));
     state.photos = mergePhotos(state.photos, remotePhotos);
     state.capsules = mergeCapsules(state.capsules, remoteCapsules);
 
@@ -1428,6 +1620,7 @@ async function pullFromSheet(){
     renderAll();
     renderYearView();
     renderCapsules();
+    refreshFilterOptions();
     checkOnThisDay();
   } catch(err){
     console.error('pull error', err);
@@ -1466,7 +1659,8 @@ async function syncToSheet(){
   if (!state.google.sheetId) return;
 
   const storyValues = state.stories.map(s=>[
-    s.id, s.year, s.month, s.title || '', s.text || '', s.place || '',
+    s.id, s.year, s.month, (s.day != null ? s.day : ''),
+    s.title || '', s.text || '', s.place || '',
     s.author || '', s.mood || '', s.voice_drive_id || '', s.updatedAt || '',
   ]);
 
@@ -1477,7 +1671,7 @@ async function syncToSheet(){
   await Promise.all([
     gapi.client.sheets.spreadsheets.values.clear({
       spreadsheetId: state.google.sheetId,
-      range: `${CONFIG.TAB_STORIES}!A2:J`,
+      range: `${CONFIG.TAB_STORIES}!A2:K`,
     }),
     gapi.client.sheets.spreadsheets.values.clear({
       spreadsheetId: state.google.sheetId,

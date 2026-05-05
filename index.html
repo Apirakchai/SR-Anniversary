@@ -132,8 +132,59 @@
     <div class="timeline-head">
       <h3>Our Monthly Memories</h3>
       <div class="search-row">
-        <input type="search" id="searchInput" placeholder="🔍 ค้นหาเรื่องราว..." />
+        <div class="search-bar">
+          <input type="search" id="searchInput" placeholder="🔍 ค้นหาเรื่องราว..." />
+          <button id="filterToggle" class="filter-toggle" title="Filter" aria-label="Filter">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+            <span class="filter-badge hidden" id="filterBadge">0</span>
+          </button>
+        </div>
         <p id="storyCount" class="muted">— stories</p>
+      </div>
+
+      <div id="filterPanel" class="filter-panel hidden">
+        <div class="filter-row">
+          <div class="filter-field">
+            <label>ปี</label>
+            <select id="filterYear"><option value="">ทุกปี</option></select>
+          </div>
+          <div class="filter-field">
+            <label>เดือน</label>
+            <select id="filterMonth">
+              <option value="">ทุกเดือน</option>
+              <option value="1">มกราคม</option><option value="2">กุมภาพันธ์</option>
+              <option value="3">มีนาคม</option><option value="4">เมษายน</option>
+              <option value="5">พฤษภาคม</option><option value="6">มิถุนายน</option>
+              <option value="7">กรกฎาคม</option><option value="8">สิงหาคม</option>
+              <option value="9">กันยายน</option><option value="10">ตุลาคม</option>
+              <option value="11">พฤศจิกายน</option><option value="12">ธันวาคม</option>
+            </select>
+          </div>
+          <div class="filter-field">
+            <label>วันที่</label>
+            <select id="filterDay">
+              <option value="">ทุกวัน</option>
+            </select>
+          </div>
+        </div>
+        <div class="filter-row">
+          <div class="filter-field full">
+            <label>อารมณ์</label>
+            <div class="filter-mood-row" id="filterMoodRow">
+              <button type="button" class="filter-mood active" data-mood="">ทั้งหมด</button>
+              <button type="button" class="filter-mood" data-mood="happy">😊</button>
+              <button type="button" class="filter-mood" data-mood="love">🥰</button>
+              <button type="button" class="filter-mood" data-mood="sad">🥺</button>
+              <button type="button" class="filter-mood" data-mood="excited">✨</button>
+              <button type="button" class="filter-mood" data-mood="peaceful">🌿</button>
+              <button type="button" class="filter-mood" data-mood="bittersweet">🌧️</button>
+            </div>
+          </div>
+        </div>
+        <div class="filter-actions">
+          <button type="button" id="filterClear" class="btn-ghost small">ล้าง filter</button>
+          <button type="button" id="filterClose" class="btn-primary small">ปิด</button>
+        </div>
       </div>
     </div>
     <div id="timeline" class="timeline"></div>
@@ -166,6 +217,13 @@
             <select id="storyMonth"></select>
             <input type="number" id="storyYear" min="2021" max="2099" />
           </div>
+        </div>
+
+        <div class="field">
+          <label>วันที่ <span class="hint">(ไม่จำเป็น — ใส่ถ้าจำได้)</span></label>
+          <select id="storyDay">
+            <option value="">— ไม่ระบุ —</option>
+          </select>
         </div>
 
         <div class="field">
