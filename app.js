@@ -1,45 +1,64 @@
 /* ═══════════════════════════════════════════════════════════════
-   Safe & Ruang · app.js
-   - Login with SHA-256 password
-   - Google Sheets + Drive sync (per-user OAuth)
+   Safe & Ruang · app.js  (v2)
+   Features:
+   - Embedded Google credentials (no manual setup)
+   - Auto-sync every 30s (paused when typing in form)
+   - Photos as separate rows in Sheet "Photos" (no cell limit)
+   - Daily auto-backup at midnight (1 row/day, max 30 rows)
+   - Restore from backup
    - LocalStorage cache for offline use
    - Anniversary surprise (8th of every month)
    - Confetti + floating hearts
 ═══════════════════════════════════════════════════════════════ */
 
 // ───────────────────────────────────────────────
-// CONFIG
+// CONFIG  ← ใส่ Client ID + API Key ของคุณตรงนี้
 // ───────────────────────────────────────────────
 const CONFIG = {
+  // Google credentials (embedded — restricted to apirakchai.github.io only)
+  GOOGLE_CLIENT_ID: 'PASTE_YOUR_CLIENT_ID_HERE',
+  GOOGLE_API_KEY:   'PASTE_YOUR_API_KEY_HERE',
+
   // SHA-256 of "080121"
   PASSWORD_HASH: '118d7c585c0ca03cd5fbeb837481aa07cdf151b94714c3a90d4b28ee560540a7',
 
   // Anniversary date
   ANNIV_DAY: 8,
-  ANNIV_MONTH: 1,   // January
+  ANNIV_MONTH: 1,
   ANNIV_YEAR: 2021,
 
-  // Google Drive folder ID where photos will be stored
+  // Google Drive folder ID for photos
   DRIVE_FOLDER_ID: '1p2Njr1sdRxva2wnrpKBJ0eh8mHxpe6WV',
 
-  // Google Sheets — will be created automatically if not set
+  // Sheet structure
   SHEET_NAME: 'SafeRuang_Stories',
-  SHEET_TAB: 'Stories',
+  TAB_STORIES: 'Stories',
+  TAB_PHOTOS:  'Photos',
+  TAB_BACKUPS: 'Backups',
 
-  // Google API scopes
+  // Sync intervals
+  AUTO_SYNC_MS: 30 * 1000,         // 30 seconds
+  TYPING_PAUSE_MS: 5 * 1000,       // pause sync 5s after last keystroke
+  BACKUP_CHECK_MS: 5 * 60 * 1000,  // check for daily backup every 5 minutes
+  MAX_BACKUPS: 30,
+
   SCOPES: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file',
   DISCOVERY_DOCS: ['https://sheets.googleapis.com/$discovery/rest?version=v4',
                    'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
 };
 
 const LS = {
-  STORIES   : 'sr_stories',
-  USER      : 'sr_user',
-  CLIENT_ID : 'sr_client_id',
-  API_KEY   : 'sr_api_key',
-  SHEET_ID  : 'sr_sheet_id',
-  TOKEN     : 'sr_token',
-  SEEN_ANNIV: 'sr_seen_anniv',
+  STORIES        : 'sr_stories',
+  PHOTOS         : 'sr_photos',          // separate from stories
+  USER           : 'sr_user',
+  CLIENT_ID      : 'sr_client_id',       // legacy override (still respected)
+  API_KEY        : 'sr_api_key',         // legacy override (still respected)
+  SHEET_ID       : 'sr_sheet_id',
+  TOKEN          : 'sr_token',
+  SEEN_ANNIV     : 'sr_seen_anniv',
+  LAST_SYNC      : 'sr_last_sync',
+  LAST_BACKUP    : 'sr_last_backup',
+  BACKUP_DAY     : 'sr_backup_day',      // YYYY-MM-DD of last backup written
 };
 
 
@@ -49,8 +68,14 @@ const LS = {
 let state = {
   user: null,
   stories: [],
-  pendingPhotos: [],   // {file, dataURL, driveId?}
+  photos: [],          // {id, story_id, drive_id, name, dataURL?}
+  pendingPhotos: [],   // staged for current form
   editingId: null,
+  isTyping: false,     // pauses auto-sync
+  typingTimer: null,
+  syncTimer: null,
+  backupTimer: null,
+  isSyncing: false,
   google: {
     tokenClient: null,
     accessToken: null,
@@ -73,7 +98,7 @@ async function sha256(text){
   return [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2,'0')).join('');
 }
 
-function uid(){ return 'st_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,7); }
+function uid(prefix='id'){ return prefix + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,7); }
 
 function toast(msg, type='', ms=2800){
   const t = $('#toast');
@@ -89,12 +114,37 @@ function loadLS(key, fallback){
 }
 function saveLS(key, val){ localStorage.setItem(key, JSON.stringify(val)); }
 
+function escapeHtml(str=''){
+  return str.replace(/[&<>"']/g, c=>({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+function safeJSON(s, fallback){
+  try { return JSON.parse(s); } catch { return fallback; }
+}
+
+function formatTime(iso){
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '—';
+  const now = new Date();
+  const diffMin = Math.floor((now - d) / 60000);
+  if (diffMin < 1) return 'เมื่อกี้';
+  if (diffMin < 60) return `${diffMin} นาทีที่แล้ว`;
+  if (diffMin < 1440) return `${Math.floor(diffMin/60)} ชั่วโมงที่แล้ว`;
+  return d.toLocaleString('th-TH', {dateStyle:'short', timeStyle:'short'});
+}
+
+function todayStr(d=new Date()){
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
 
 // ───────────────────────────────────────────────
 // LOGIN
 // ───────────────────────────────────────────────
 function initLogin(){
-  // user pick
   $$('.user-btn').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       $$('.user-btn').forEach(b=>b.classList.remove('active'));
@@ -104,14 +154,12 @@ function initLogin(){
     });
   });
 
-  // pin enter key
   $('#pinInput').addEventListener('keypress', e=>{
     if (e.key === 'Enter') doLogin();
   });
 
   $('#loginBtn').addEventListener('click', doLogin);
 
-  // auto-resume if previously logged in this session
   const cached = sessionStorage.getItem(LS.USER);
   if (cached){
     state.user = cached;
@@ -155,6 +203,7 @@ function showApp(){
 function logout(){
   sessionStorage.removeItem(LS.USER);
   state.user = null;
+  stopAutoSync();
   $('#appScreen').classList.remove('active');
   $('#loginScreen').classList.add('active');
   $$('.user-btn').forEach(b=>b.classList.remove('active'));
@@ -167,8 +216,8 @@ function logout(){
 // APP INIT
 // ───────────────────────────────────────────────
 function initApp(){
-  // Load cached data
   state.stories = loadLS(LS.STORIES, []);
+  state.photos  = loadLS(LS.PHOTOS, []);
   state.google.sheetId = localStorage.getItem(LS.SHEET_ID) || null;
 
   initTabs();
@@ -176,16 +225,26 @@ function initApp(){
   initSettings();
   initModal();
   initLogout();
-  initSync();
+  initTypingDetector();
 
   renderAll();
   startCounters();
   checkAnniversary();
   startHeartLayer();
+  updateSettingsTimes();
 
-  // Try to auto-sync if we have credentials cached
-  if (localStorage.getItem(LS.CLIENT_ID) && localStorage.getItem(LS.API_KEY)){
-    initGoogleAPI();
+  // Determine credentials (CONFIG first, then localStorage as fallback)
+  const cid = (CONFIG.GOOGLE_CLIENT_ID && !CONFIG.GOOGLE_CLIENT_ID.startsWith('PASTE_'))
+              ? CONFIG.GOOGLE_CLIENT_ID
+              : localStorage.getItem(LS.CLIENT_ID);
+  const key = (CONFIG.GOOGLE_API_KEY && !CONFIG.GOOGLE_API_KEY.startsWith('PASTE_'))
+              ? CONFIG.GOOGLE_API_KEY
+              : localStorage.getItem(LS.API_KEY);
+
+  if (cid && key){
+    initGoogleAPI(cid, key);
+  } else {
+    setSyncIndicator('off', 'no creds');
   }
 }
 
@@ -214,7 +273,7 @@ function switchTab(name){
 
 
 // ───────────────────────────────────────────────
-// COUNTERS (since 8 Jan 2021)
+// COUNTERS
 // ───────────────────────────────────────────────
 function startCounters(){
   updateCounters();
@@ -225,12 +284,9 @@ function updateCounters(){
   const start = new Date(CONFIG.ANNIV_YEAR, CONFIG.ANNIV_MONTH-1, CONFIG.ANNIV_DAY);
   const now   = new Date();
 
-  // total days
-  const diffMs   = now - start;
-  const totalDays = Math.floor(diffMs / 86400000);
+  const totalDays = Math.floor((now - start) / 86400000);
   $('#daysTogether').textContent = `${totalDays.toLocaleString()} days together`;
 
-  // years/months/days breakdown
   let years  = now.getFullYear() - start.getFullYear();
   let months = now.getMonth() - start.getMonth();
   let days   = now.getDate() - start.getDate();
@@ -245,7 +301,6 @@ function updateCounters(){
   $('#cMonths').textContent = months;
   $('#cDays').textContent   = days;
 
-  // next monthiversary
   const nextAnniv = new Date(now.getFullYear(), now.getMonth(), CONFIG.ANNIV_DAY);
   if (now.getDate() > CONFIG.ANNIV_DAY) nextAnniv.setMonth(nextAnniv.getMonth()+1);
   if (now.getDate() === CONFIG.ANNIV_DAY){
@@ -258,10 +313,38 @@ function updateCounters(){
 
 
 // ───────────────────────────────────────────────
+// TYPING DETECTOR  (pauses auto-sync while user is editing)
+// ───────────────────────────────────────────────
+function initTypingDetector(){
+  const formInputs = ['#storyTitle', '#storyText', '#storyPlace', '#storyMonth', '#storyYear'];
+  formInputs.forEach(sel=>{
+    const el = $(sel);
+    if (!el) return;
+    el.addEventListener('input', markTyping);
+    el.addEventListener('keydown', markTyping);
+    el.addEventListener('focus', markTyping);
+  });
+}
+
+function markTyping(){
+  state.isTyping = true;
+  if (state.syncTimer && state.google.accessToken){
+    setSyncIndicator('paused', 'paused (typing)');
+  }
+  clearTimeout(state.typingTimer);
+  state.typingTimer = setTimeout(()=>{
+    state.isTyping = false;
+    if (state.google.accessToken){
+      setSyncIndicator('connected', 'connected');
+    }
+  }, CONFIG.TYPING_PAUSE_MS);
+}
+
+
+// ───────────────────────────────────────────────
 // FORM
 // ───────────────────────────────────────────────
 function initForm(){
-  // Month select
   const months = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน',
                   'กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
   const sel = $('#storyMonth');
@@ -275,7 +358,6 @@ function initForm(){
   sel.value = now.getMonth()+1;
   $('#storyYear').value = now.getFullYear();
 
-  // Photo upload
   const area = $('#uploadArea');
   const input = $('#storyPhotos');
   area.addEventListener('click', ()=>input.click());
@@ -314,7 +396,7 @@ function handleFiles(fileList){
     if (!file.type.startsWith('image/')) return;
     const reader = new FileReader();
     reader.onload = ev=>{
-      const photo = { id: uid(), file, dataURL: ev.target.result, driveId: null, name: file.name };
+      const photo = { id: uid('ph'), file, dataURL: ev.target.result, drive_id: null, name: file.name };
       state.pendingPhotos.push(photo);
       renderPhotoPreview();
     };
@@ -328,8 +410,9 @@ function renderPhotoPreview(){
   state.pendingPhotos.forEach(p=>{
     const el = document.createElement('div');
     el.className = 'pp';
+    const src = p.dataURL || (p.drive_id ? driveImageUrl(p.drive_id) : '');
     el.innerHTML = `
-      <img src="${p.dataURL || (p.driveId ? driveImageUrl(p.driveId) : '')}" alt=""/>
+      <img src="${src}" alt=""/>
       <span class="x" data-id="${p.id}">×</span>
     `;
     el.querySelector('.x').addEventListener('click', e=>{
@@ -342,14 +425,13 @@ function renderPhotoPreview(){
 }
 
 function driveImageUrl(driveId){
-  // Public thumbnail URL (works if file is shared)
   return `https://drive.google.com/thumbnail?id=${driveId}&sz=w800`;
 }
 
 async function onSaveStory(e){
   e.preventDefault();
 
-  const id      = $('#storyId').value || uid();
+  const id      = $('#storyId').value || uid('st');
   const month   = parseInt($('#storyMonth').value, 10);
   const year    = parseInt($('#storyYear').value, 10);
   const title   = $('#storyTitle').value.trim();
@@ -360,44 +442,44 @@ async function onSaveStory(e){
 
   toast('กำลังบันทึก...', '', 5000);
 
-  // Upload pending photos to Google Drive (if connected)
-  const photos = [];
+  // Upload pending photos to Drive (if connected)
+  const newPhotos = [];
   for (const p of state.pendingPhotos){
-    if (p.driveId){
-      photos.push({ id: p.driveId, name: p.name });
+    if (p.drive_id){
+      // already uploaded (kept from edit)
+      newPhotos.push({ id: p.id, story_id: id, drive_id: p.drive_id, name: p.name, dataURL: null });
     } else if (p.file && state.google.accessToken){
       try{
         const driveId = await uploadToDrive(p.file);
-        photos.push({ id: driveId, name: p.name });
+        newPhotos.push({ id: p.id, story_id: id, drive_id: driveId, name: p.name, dataURL: null });
       } catch(err){
         console.error(err);
-        // fallback: store as data URL locally only
-        photos.push({ id: null, name: p.name, dataURL: p.dataURL });
+        // fallback: keep dataURL local
+        newPhotos.push({ id: p.id, story_id: id, drive_id: null, name: p.name, dataURL: p.dataURL });
       }
     } else if (p.dataURL){
-      // No google connected — store locally only (won't sync)
-      photos.push({ id: null, name: p.name, dataURL: p.dataURL });
+      newPhotos.push({ id: p.id, story_id: id, drive_id: null, name: p.name, dataURL: p.dataURL });
     }
   }
 
+  // Replace this story's photos
+  state.photos = state.photos.filter(p=>p.story_id !== id).concat(newPhotos);
+
   const story = {
     id, month, year, title, text, place,
-    photos,
     author: state.user,
     updatedAt: new Date().toISOString(),
   };
 
-  // Insert or update
   const existing = state.stories.findIndex(s=>s.id===id);
   if (existing >= 0) state.stories[existing] = story;
   else state.stories.push(story);
 
-  // Sort by year/month
   state.stories.sort((a,b)=> (b.year - a.year) || (b.month - a.month));
 
   saveLS(LS.STORIES, state.stories);
+  saveLS(LS.PHOTOS, state.photos);
 
-  // Sync to Sheet if connected
   if (state.google.accessToken){
     try { await syncToSheet(); }
     catch(err){ console.error(err); toast('บันทึกในเครื่องแล้ว แต่ sync ไม่สำเร็จ', 'error', 4000); }
@@ -413,6 +495,10 @@ async function onSaveStory(e){
 // ───────────────────────────────────────────────
 // RENDER TIMELINE
 // ───────────────────────────────────────────────
+function getStoryPhotos(storyId){
+  return state.photos.filter(p=>p.story_id === storyId);
+}
+
 function renderAll(){
   const list = $('#timeline');
   const empty = $('#emptyState');
@@ -429,9 +515,10 @@ function renderAll(){
   const monthsTH = ['','ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
 
   list.innerHTML = state.stories.map((s, idx)=>{
-    const num = state.stories.length - idx; // newest gets highest #
-    const cover = s.photos && s.photos[0]
-      ? (s.photos[0].id ? driveImageUrl(s.photos[0].id) : s.photos[0].dataURL)
+    const num = state.stories.length - idx;
+    const photos = getStoryPhotos(s.id);
+    const cover = photos[0]
+      ? (photos[0].drive_id ? driveImageUrl(photos[0].drive_id) : photos[0].dataURL)
       : null;
     return `
       <article class="story-card" data-id="${s.id}">
@@ -446,23 +533,16 @@ function renderAll(){
           <div class="story-meta">
             <span>by ${escapeHtml(s.author || '—')}</span>
             ${s.place ? `<span>· ${escapeHtml(s.place)}</span>` : ''}
-            ${s.photos && s.photos.length>0 ? `<span>· ${s.photos.length} 📷</span>` : ''}
+            ${photos.length>0 ? `<span>· ${photos.length} 📷</span>` : ''}
           </div>
         </div>
       </article>
     `;
   }).join('');
 
-  // click to open
   $$('.story-card').forEach(c=>{
     c.addEventListener('click', ()=>openStory(c.dataset.id));
   });
-}
-
-function escapeHtml(str=''){
-  return str.replace(/[&<>"']/g, c=>({
-    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
-  }[c]));
 }
 
 
@@ -480,13 +560,14 @@ function openStory(id){
 
   const monthsFull = ['','January','February','March','April','May','June',
                       'July','August','September','October','November','December'];
-  const cover = s.photos && s.photos[0]
-    ? (s.photos[0].id ? driveImageUrl(s.photos[0].id) : s.photos[0].dataURL)
+  const photos = getStoryPhotos(id);
+  const cover = photos[0]
+    ? (photos[0].drive_id ? driveImageUrl(photos[0].drive_id) : photos[0].dataURL)
     : null;
 
-  const galleryHTML = s.photos && s.photos.length > 1
-    ? `<div class="mc-gallery">${s.photos.slice(1).map(p=>{
-        const src = p.id ? driveImageUrl(p.id) : p.dataURL;
+  const galleryHTML = photos.length > 1
+    ? `<div class="mc-gallery">${photos.slice(1).map(p=>{
+        const src = p.drive_id ? driveImageUrl(p.drive_id) : p.dataURL;
         return `<img src="${src}" alt="" loading="lazy"/>`;
       }).join('')}</div>`
     : '';
@@ -526,8 +607,11 @@ function editStory(id){
   const s = state.stories.find(x=>x.id===id);
   if (!s) return;
   state.editingId = id;
-  state.pendingPhotos = (s.photos||[]).map(p=>({
-    id: uid(), driveId: p.id, name: p.name, dataURL: p.dataURL || (p.id ? driveImageUrl(p.id) : '')
+  state.pendingPhotos = getStoryPhotos(id).map(p=>({
+    id: p.id,
+    drive_id: p.drive_id,
+    name: p.name,
+    dataURL: p.dataURL || (p.drive_id ? driveImageUrl(p.drive_id) : ''),
   }));
   $('#storyId').value = s.id;
   $('#storyMonth').value = s.month;
@@ -544,7 +628,9 @@ function editStory(id){
 async function deleteStory(id){
   if (!confirm('ต้องการลบเรื่องราวนี้จริง ๆ ?')) return;
   state.stories = state.stories.filter(s=>s.id!==id);
+  state.photos  = state.photos.filter(p=>p.story_id !== id);
   saveLS(LS.STORIES, state.stories);
+  saveLS(LS.PHOTOS, state.photos);
   if (state.google.accessToken){
     try { await syncToSheet(); } catch(e){ console.error(e); }
   }
@@ -559,21 +645,6 @@ async function deleteStory(id){
 // ═══════════════════════════════════════════════════════════════
 
 function initSettings(){
-  // load credentials into inputs
-  $('#clientIdInput').value = localStorage.getItem(LS.CLIENT_ID) || '';
-  $('#apiKeyInput').value   = localStorage.getItem(LS.API_KEY)   || '';
-  $('#sheetIdDisplay').textContent = state.google.sheetId || '— (will be created on first sync)';
-
-  $('#saveCreds').addEventListener('click', ()=>{
-    const cid = $('#clientIdInput').value.trim();
-    const key = $('#apiKeyInput').value.trim();
-    if (!cid || !key){ toast('ต้องใส่ทั้ง Client ID และ API Key', 'error'); return; }
-    localStorage.setItem(LS.CLIENT_ID, cid);
-    localStorage.setItem(LS.API_KEY, key);
-    toast('บันทึกแล้ว — กำลังโหลด Google API...', 'success');
-    initGoogleAPI();
-  });
-
   $('#googleConnectBtn').addEventListener('click', connectGoogle);
   $('#googleSyncNow').addEventListener('click', manualSync);
   $('#googleDisconnect').addEventListener('click', disconnectGoogle);
@@ -581,6 +652,10 @@ function initSettings(){
   $('#exportBtn').addEventListener('click', exportData);
   $('#importBtn').addEventListener('click', ()=>$('#importFile').click());
   $('#importFile').addEventListener('change', importData);
+
+  $('#loadBackupsBtn').addEventListener('click', loadBackupList);
+  $('#restoreBackupBtn').addEventListener('click', restoreSelectedBackup);
+  $('#backupNowBtn').addEventListener('click', ()=>writeBackup(true));
 }
 
 function setGoogleStatus(connected){
@@ -589,47 +664,64 @@ function setGoogleStatus(connected){
   pill.className = 'status-pill ' + (connected ? 'on' : 'off');
 }
 
-function initGoogleAPI(){
-  const cid = localStorage.getItem(LS.CLIENT_ID);
-  const key = localStorage.getItem(LS.API_KEY);
-  if (!cid || !key) return;
+function setSyncIndicator(state, label){
+  const ind = $('#syncIndicator');
+  if (!ind) return;
+  ind.className = 'sync-indicator ' + state;
+  const txt = ind.querySelector('.sync-text');
+  if (txt) txt.textContent = label || state;
+}
 
-  // Wait for both libraries
+function updateSettingsTimes(){
+  $('#lastSyncTime').textContent   = formatTime(localStorage.getItem(LS.LAST_SYNC));
+  $('#lastBackupTime').textContent = formatTime(localStorage.getItem(LS.LAST_BACKUP));
+}
+
+function initGoogleAPI(clientId, apiKey){
   const ready = ()=> typeof gapi !== 'undefined' && typeof google !== 'undefined' && google.accounts;
-  if (!ready()){ setTimeout(initGoogleAPI, 400); return; }
+  if (!ready()){ setTimeout(()=>initGoogleAPI(clientId, apiKey), 400); return; }
+
+  setSyncIndicator('off', 'connecting…');
 
   gapi.load('client', async ()=>{
     try {
       await gapi.client.init({
-        apiKey: key,
+        apiKey,
         discoveryDocs: CONFIG.DISCOVERY_DOCS,
       });
       state.google.gapiReady = true;
 
       state.google.tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: cid,
+        client_id: clientId,
         scope: CONFIG.SCOPES,
         callback: tokenCallback,
       });
       state.google.gisReady = true;
 
-      // Try silent token refresh if we had one
+      // Try silent token refresh
       const cached = localStorage.getItem(LS.TOKEN);
       if (cached){
         try {
           const tk = JSON.parse(cached);
-          if (tk.expires_at && tk.expires_at > Date.now()){
+          if (tk.expires_at && tk.expires_at > Date.now() + 60000){
             state.google.accessToken = tk.access_token;
             gapi.client.setToken({access_token: tk.access_token});
             setGoogleStatus(true);
-            // pull data
-            pullFromSheet();
+            setSyncIndicator('connected', 'connected');
+            await pullFromSheet();
+            startAutoSync();
+            startBackupTimer();
+            updateSettingsTimes();
+            return;
           }
         } catch(e){}
       }
+      // need user to click connect
+      setSyncIndicator('off', 'tap connect');
     } catch(err){
       console.error('gapi init error', err);
       toast('โหลด Google API ไม่สำเร็จ', 'error');
+      setSyncIndicator('error', 'init failed');
     }
   });
 }
@@ -637,7 +729,6 @@ function initGoogleAPI(){
 function connectGoogle(){
   if (!state.google.tokenClient){
     toast('ยังโหลด Google API ไม่เสร็จ — รอสักครู่', 'error');
-    initGoogleAPI();
     return;
   }
   state.google.tokenClient.requestAccessToken({prompt: 'consent'});
@@ -647,23 +738,25 @@ async function tokenCallback(resp){
   if (resp.error){
     console.error(resp);
     toast('เชื่อมต่อ Google ไม่สำเร็จ', 'error');
+    setSyncIndicator('error', 'auth failed');
     return;
   }
   state.google.accessToken = resp.access_token;
   gapi.client.setToken({access_token: resp.access_token});
 
-  // Cache
   localStorage.setItem(LS.TOKEN, JSON.stringify({
     access_token: resp.access_token,
     expires_at: Date.now() + (resp.expires_in||3600)*1000,
   }));
   setGoogleStatus(true);
+  setSyncIndicator('connected', 'connected');
   toast('เชื่อมต่อสำเร็จ ✓', 'success');
 
-  // Find or create sheet
   await ensureSheetExists();
-  // Sync
   await pullFromSheet();
+  startAutoSync();
+  startBackupTimer();
+  updateSettingsTimes();
 }
 
 function disconnectGoogle(){
@@ -673,57 +766,122 @@ function disconnectGoogle(){
   state.google.accessToken = null;
   localStorage.removeItem(LS.TOKEN);
   setGoogleStatus(false);
+  setSyncIndicator('off', 'disconnected');
+  stopAutoSync();
   toast('ตัดการเชื่อมต่อแล้ว');
 }
 
 async function ensureSheetExists(){
   if (state.google.sheetId){
-    $('#sheetIdDisplay').textContent = state.google.sheetId;
-    return state.google.sheetId;
+    // Verify it's still accessible & has all required tabs
+    try {
+      const meta = await gapi.client.sheets.spreadsheets.get({spreadsheetId: state.google.sheetId});
+      const tabs = (meta.result.sheets||[]).map(s=>s.properties.title);
+      await ensureRequiredTabs(tabs);
+      return state.google.sheetId;
+    } catch(err){
+      // sheet was deleted or access lost — fall through to recreate
+      state.google.sheetId = null;
+      localStorage.removeItem(LS.SHEET_ID);
+    }
   }
 
-  // Search Drive for an existing file
   const q = `name='${CONFIG.SHEET_NAME}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
   const found = await gapi.client.drive.files.list({ q, fields: 'files(id,name)' });
   if (found.result.files && found.result.files.length > 0){
     state.google.sheetId = found.result.files[0].id;
     localStorage.setItem(LS.SHEET_ID, state.google.sheetId);
-    $('#sheetIdDisplay').textContent = state.google.sheetId;
+    const meta = await gapi.client.sheets.spreadsheets.get({spreadsheetId: state.google.sheetId});
+    const tabs = (meta.result.sheets||[]).map(s=>s.properties.title);
+    await ensureRequiredTabs(tabs);
     return state.google.sheetId;
   }
 
-  // Create new spreadsheet
+  // Create new spreadsheet with all 3 tabs
   const res = await gapi.client.sheets.spreadsheets.create({
     resource: {
       properties: { title: CONFIG.SHEET_NAME },
-      sheets: [{ properties: { title: CONFIG.SHEET_TAB } }],
+      sheets: [
+        { properties: { title: CONFIG.TAB_STORIES } },
+        { properties: { title: CONFIG.TAB_PHOTOS } },
+        { properties: { title: CONFIG.TAB_BACKUPS } },
+      ],
     }
   });
   state.google.sheetId = res.result.spreadsheetId;
   localStorage.setItem(LS.SHEET_ID, state.google.sheetId);
-  $('#sheetIdDisplay').textContent = state.google.sheetId;
 
-  // Header row
-  await gapi.client.sheets.spreadsheets.values.update({
-    spreadsheetId: state.google.sheetId,
-    range: `${CONFIG.SHEET_TAB}!A1:H1`,
-    valueInputOption: 'RAW',
-    resource: { values: [['id','year','month','title','text','place','author','photos_json','updatedAt']] }
-  });
+  // Write headers
+  await writeHeaders();
 
   toast('สร้าง Google Sheet ใหม่แล้ว ✓', 'success');
   return state.google.sheetId;
 }
 
+async function ensureRequiredTabs(existingTabs){
+  const required = [CONFIG.TAB_STORIES, CONFIG.TAB_PHOTOS, CONFIG.TAB_BACKUPS];
+  const missing = required.filter(t => !existingTabs.includes(t));
+  if (missing.length === 0) return;
+
+  const requests = missing.map(title => ({
+    addSheet: { properties: { title } }
+  }));
+  await gapi.client.sheets.spreadsheets.batchUpdate({
+    spreadsheetId: state.google.sheetId,
+    resource: { requests },
+  });
+  await writeHeaders();
+}
+
+async function writeHeaders(){
+  const data = [
+    {
+      range: `${CONFIG.TAB_STORIES}!A1:G1`,
+      values: [['id','year','month','title','text','place','author','updatedAt']],
+    },
+    {
+      range: `${CONFIG.TAB_PHOTOS}!A1:E1`,
+      values: [['id','story_id','drive_id','name','dataURL_fallback']],
+    },
+    {
+      range: `${CONFIG.TAB_BACKUPS}!A1:D1`,
+      values: [['date','timestamp','story_count','snapshot_json']],
+    },
+  ];
+
+  // Adjust stories header range (8 cols, not 7)
+  data[0].range = `${CONFIG.TAB_STORIES}!A1:H1`;
+
+  await gapi.client.sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId: state.google.sheetId,
+    resource: {
+      valueInputOption: 'RAW',
+      data,
+    }
+  });
+}
+
+
+// ───────────────────────────────────────────────
+// SYNC: pull from Sheet
+// ───────────────────────────────────────────────
 async function pullFromSheet(){
   if (!state.google.sheetId) await ensureSheetExists();
+  if (!state.google.sheetId) return;
+
   try {
-    const res = await gapi.client.sheets.spreadsheets.values.get({
+    const res = await gapi.client.sheets.spreadsheets.values.batchGet({
       spreadsheetId: state.google.sheetId,
-      range: `${CONFIG.SHEET_TAB}!A2:I`,
+      ranges: [
+        `${CONFIG.TAB_STORIES}!A2:H`,
+        `${CONFIG.TAB_PHOTOS}!A2:E`,
+      ],
     });
-    const rows = res.result.values || [];
-    const remoteStories = rows.map(r=>({
+
+    const storyRows = res.result.valueRanges?.[0]?.values || [];
+    const photoRows = res.result.valueRanges?.[1]?.values || [];
+
+    const remoteStories = storyRows.map(r=>({
       id: r[0],
       year: parseInt(r[1],10),
       month: parseInt(r[2],10),
@@ -731,23 +889,28 @@ async function pullFromSheet(){
       text: r[4] || '',
       place: r[5] || '',
       author: r[6] || '',
-      photos: r[7] ? safeJSON(r[7], []) : [],
-      updatedAt: r[8] || '',
+      updatedAt: r[7] || '',
     })).filter(s=>s.id);
 
-    // Merge with local — newest wins per id
-    const merged = mergeStories(state.stories, remoteStories);
-    state.stories = merged;
+    const remotePhotos = photoRows.map(r=>({
+      id: r[0],
+      story_id: r[1],
+      drive_id: r[2] || null,
+      name: r[3] || '',
+      dataURL: r[4] || null,
+    })).filter(p=>p.id && p.story_id);
+
+    state.stories = mergeStories(state.stories, remoteStories);
     state.stories.sort((a,b)=> (b.year - a.year) || (b.month - a.month));
+    state.photos = mergePhotos(state.photos, remotePhotos);
+
     saveLS(LS.STORIES, state.stories);
+    saveLS(LS.PHOTOS, state.photos);
     renderAll();
   } catch(err){
     console.error('pull error', err);
+    throw err;
   }
-}
-
-function safeJSON(s, fallback){
-  try { return JSON.parse(s); } catch { return fallback; }
 }
 
 function mergeStories(local, remote){
@@ -759,30 +922,122 @@ function mergeStories(local, remote){
   return [...map.values()];
 }
 
+function mergePhotos(local, remote){
+  // photos are immutable once uploaded — just dedupe by id
+  const map = new Map();
+  [...remote, ...local].forEach(p=>{ if (!map.has(p.id)) map.set(p.id, p); });
+  return [...map.values()];
+}
+
+
+// ───────────────────────────────────────────────
+// SYNC: push to Sheet
+// ───────────────────────────────────────────────
 async function syncToSheet(){
   if (!state.google.accessToken) return;
   if (!state.google.sheetId) await ensureSheetExists();
+  if (!state.google.sheetId) return;
 
-  const values = state.stories.map(s=>[
+  const storyValues = state.stories.map(s=>[
     s.id, s.year, s.month, s.title || '', s.text || '', s.place || '',
-    s.author || '', JSON.stringify(s.photos || []), s.updatedAt || '',
+    s.author || '', s.updatedAt || '',
   ]);
 
-  // Clear data rows then write fresh
-  await gapi.client.sheets.spreadsheets.values.clear({
+  const photoValues = state.photos.map(p=>[
+    p.id, p.story_id, p.drive_id || '', p.name || '', p.dataURL || '',
+  ]);
+
+  // Clear & rewrite both tabs
+  await gapi.client.sheets.spreadsheets.values.batchClear({
     spreadsheetId: state.google.sheetId,
-    range: `${CONFIG.SHEET_TAB}!A2:I`,
+    ranges: [
+      `${CONFIG.TAB_STORIES}!A2:H`,
+      `${CONFIG.TAB_PHOTOS}!A2:E`,
+    ],
   });
-  if (values.length > 0){
-    await gapi.client.sheets.spreadsheets.values.update({
+
+  const data = [];
+  if (storyValues.length){
+    data.push({ range:`${CONFIG.TAB_STORIES}!A2`, values: storyValues });
+  }
+  if (photoValues.length){
+    data.push({ range:`${CONFIG.TAB_PHOTOS}!A2`, values: photoValues });
+  }
+
+  if (data.length){
+    await gapi.client.sheets.spreadsheets.values.batchUpdate({
       spreadsheetId: state.google.sheetId,
-      range: `${CONFIG.SHEET_TAB}!A2`,
-      valueInputOption: 'RAW',
-      resource: { values },
+      resource: { valueInputOption:'RAW', data },
     });
+  }
+
+  localStorage.setItem(LS.LAST_SYNC, new Date().toISOString());
+  updateSettingsTimes();
+}
+
+
+// ───────────────────────────────────────────────
+// AUTO-SYNC LOOP
+// ───────────────────────────────────────────────
+function startAutoSync(){
+  stopAutoSync();
+  state.syncTimer = setInterval(autoSyncTick, CONFIG.AUTO_SYNC_MS);
+  setTimeout(autoSyncTick, 2000); // initial tick soon
+}
+
+function stopAutoSync(){
+  if (state.syncTimer){
+    clearInterval(state.syncTimer);
+    state.syncTimer = null;
+  }
+  if (state.backupTimer){
+    clearInterval(state.backupTimer);
+    state.backupTimer = null;
   }
 }
 
+async function autoSyncTick(){
+  if (!state.google.accessToken) return;
+  if (state.isTyping) return;       // user is editing — skip
+  if (state.isSyncing) return;       // already in flight
+
+  state.isSyncing = true;
+  setSyncIndicator('syncing', 'syncing…');
+
+  try {
+    await pullFromSheet();
+    await syncToSheet();
+    setSyncIndicator('connected', 'connected');
+  } catch(err){
+    console.warn('auto-sync error', err);
+    setSyncIndicator('error', 'sync failed');
+  } finally {
+    state.isSyncing = false;
+  }
+}
+
+async function manualSync(){
+  if (!state.google.accessToken){
+    toast('ยังไม่ได้เชื่อมต่อ Google', 'error', 4000);
+    return;
+  }
+  setSyncIndicator('syncing', 'syncing…');
+  try {
+    await pullFromSheet();
+    await syncToSheet();
+    setSyncIndicator('connected', 'connected');
+    toast('Sync เรียบร้อย ✓', 'success');
+  } catch(err){
+    console.error(err);
+    setSyncIndicator('error', 'sync failed');
+    toast('Sync ไม่สำเร็จ', 'error');
+  }
+}
+
+
+// ───────────────────────────────────────────────
+// DRIVE UPLOAD
+// ───────────────────────────────────────────────
 async function uploadToDrive(file){
   if (!state.google.accessToken) throw new Error('Not connected');
   const metadata = {
@@ -804,7 +1059,7 @@ async function uploadToDrive(file){
   }
   const data = await res.json();
 
-  // Make public so the photo URL works for viewing
+  // Public read
   await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`, {
     method:'POST',
     headers:{
@@ -818,29 +1073,143 @@ async function uploadToDrive(file){
 }
 
 
-// ───────────────────────────────────────────────
-// SYNC button
-// ───────────────────────────────────────────────
-function initSync(){
-  $('#syncBtn').addEventListener('click', manualSync);
+// ═══════════════════════════════════════════════════════════════
+// DAILY BACKUP
+// ═══════════════════════════════════════════════════════════════
+
+function startBackupTimer(){
+  // Check every 5 minutes if today's backup needs to be written
+  state.backupTimer = setInterval(maybeWriteBackup, CONFIG.BACKUP_CHECK_MS);
+  setTimeout(maybeWriteBackup, 8000); // initial check shortly after load
 }
 
-async function manualSync(){
+async function maybeWriteBackup(){
+  if (!state.google.accessToken) return;
+  const today = todayStr();
+  const lastDay = localStorage.getItem(LS.BACKUP_DAY);
+  if (lastDay === today) return;  // already backed up today
+  await writeBackup(false);
+}
+
+async function writeBackup(showToast){
   if (!state.google.accessToken){
-    toast('ยังไม่ได้เชื่อมต่อ Google — ไปที่ Settings ก่อน', 'error', 4000);
-    switchTab('settings');
+    if (showToast) toast('ต้องเชื่อมต่อ Google ก่อนถึงจะ backup ได้', 'error');
     return;
   }
-  $('#syncBtn').classList.add('syncing');
+  if (!state.google.sheetId) await ensureSheetExists();
+
   try {
-    await pullFromSheet();
-    await syncToSheet();
-    toast('Sync เรียบร้อย ✓', 'success');
+    const today = todayStr();
+    const ts = new Date().toISOString();
+    const snapshot = {
+      stories: state.stories,
+      photos: state.photos,
+    };
+    const snapStr = JSON.stringify(snapshot);
+
+    // Fetch existing backups
+    const res = await gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId: state.google.sheetId,
+      range: `${CONFIG.TAB_BACKUPS}!A2:D`,
+    });
+    let backups = res.result.values || [];
+
+    // Remove any existing entry for today (replace if double-backup same day)
+    backups = backups.filter(r => r[0] !== today);
+
+    // Prepend new entry
+    backups.unshift([today, ts, String(state.stories.length), snapStr]);
+
+    // Keep only the most recent N
+    backups = backups.slice(0, CONFIG.MAX_BACKUPS);
+
+    // Clear & rewrite
+    await gapi.client.sheets.spreadsheets.values.clear({
+      spreadsheetId: state.google.sheetId,
+      range: `${CONFIG.TAB_BACKUPS}!A2:D`,
+    });
+    if (backups.length){
+      await gapi.client.sheets.spreadsheets.values.update({
+        spreadsheetId: state.google.sheetId,
+        range: `${CONFIG.TAB_BACKUPS}!A2`,
+        valueInputOption: 'RAW',
+        resource: { values: backups },
+      });
+    }
+
+    localStorage.setItem(LS.BACKUP_DAY, today);
+    localStorage.setItem(LS.LAST_BACKUP, ts);
+    updateSettingsTimes();
+
+    if (showToast) toast(`Backup สำเร็จ (เก็บไว้ ${backups.length} วัน)`, 'success');
+  } catch(err){
+    console.error('backup error', err);
+    if (showToast) toast('Backup ไม่สำเร็จ', 'error');
+  }
+}
+
+async function loadBackupList(){
+  if (!state.google.accessToken){
+    toast('ต้องเชื่อมต่อ Google ก่อน', 'error');
+    return;
+  }
+  if (!state.google.sheetId) await ensureSheetExists();
+
+  try {
+    const res = await gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId: state.google.sheetId,
+      range: `${CONFIG.TAB_BACKUPS}!A2:D`,
+    });
+    const backups = res.result.values || [];
+    const sel = $('#backupSelect');
+    sel.innerHTML = '';
+    if (backups.length === 0){
+      sel.innerHTML = '<option value="">— ยังไม่มี backup —</option>';
+      toast('ยังไม่มี backup ในระบบ', '', 3000);
+      return;
+    }
+    sel.innerHTML = '<option value="">— เลือกวันที่ —</option>' + backups.map((r, i)=>{
+      const date = r[0];
+      const ts = r[1];
+      const count = r[2];
+      const niceDate = new Date(ts).toLocaleString('th-TH', {dateStyle:'medium', timeStyle:'short'});
+      return `<option value="${i}">${date} · ${count} stories · ${niceDate}</option>`;
+    }).join('');
+    sel.dataset.backups = JSON.stringify(backups);
+    toast(`โหลด backup ${backups.length} รายการ ✓`, 'success');
   } catch(err){
     console.error(err);
-    toast('Sync ไม่สำเร็จ', 'error');
-  } finally {
-    $('#syncBtn').classList.remove('syncing');
+    toast('โหลด backup ไม่สำเร็จ', 'error');
+  }
+}
+
+async function restoreSelectedBackup(){
+  const sel = $('#backupSelect');
+  const idx = sel.value;
+  if (!idx){ toast('เลือกวันที่ก่อน', 'error'); return; }
+  const backups = safeJSON(sel.dataset.backups, []);
+  const row = backups[parseInt(idx,10)];
+  if (!row){ toast('ไม่พบ backup ที่เลือก', 'error'); return; }
+
+  if (!confirm(`กู้คืนข้อมูลของวันที่ ${row[0]}?\n(${row[2]} stories)\n\nข้อมูลปัจจุบันจะถูกแทนที่`)) return;
+
+  try {
+    const snapshot = JSON.parse(row[3]);
+    state.stories = snapshot.stories || [];
+    state.photos  = snapshot.photos  || [];
+    state.stories.sort((a,b)=> (b.year - a.year) || (b.month - a.month));
+    saveLS(LS.STORIES, state.stories);
+    saveLS(LS.PHOTOS, state.photos);
+    renderAll();
+
+    // Push restored data to Sheet
+    if (state.google.accessToken){
+      await syncToSheet();
+    }
+    toast('กู้คืนสำเร็จ ✓', 'success');
+  } catch(err){
+    console.error(err);
+    toast('กู้คืนไม่สำเร็จ — backup เสียหาย?', 'error');
   }
 }
 
@@ -849,10 +1218,11 @@ async function manualSync(){
 // EXPORT / IMPORT (offline backup)
 // ───────────────────────────────────────────────
 function exportData(){
-  const blob = new Blob([JSON.stringify(state.stories, null, 2)], {type:'application/json'});
+  const payload = { stories: state.stories, photos: state.photos, exportedAt: new Date().toISOString() };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `safe-ruang-stories-${new Date().toISOString().slice(0,10)}.json`;
+  a.download = `safe-ruang-backup-${todayStr()}.json`;
   a.click();
 }
 
@@ -862,12 +1232,22 @@ function importData(e){
   r.onload = ()=>{
     try {
       const data = JSON.parse(r.result);
-      if (!Array.isArray(data)) throw new Error('bad format');
-      state.stories = mergeStories(state.stories, data);
+      // Support both old (array) and new (object) formats
+      let stories, photos;
+      if (Array.isArray(data)){
+        stories = data; photos = [];
+      } else {
+        stories = data.stories || [];
+        photos  = data.photos  || [];
+      }
+      state.stories = mergeStories(state.stories, stories);
+      state.photos  = mergePhotos(state.photos, photos);
       state.stories.sort((a,b)=> (b.year - a.year) || (b.month - a.month));
       saveLS(LS.STORIES, state.stories);
+      saveLS(LS.PHOTOS, state.photos);
       renderAll();
       toast('นำเข้าสำเร็จ', 'success');
+      if (state.google.accessToken) syncToSheet();
     } catch(err){ toast('ไฟล์ไม่ถูกต้อง', 'error'); }
   };
   r.readAsText(f);
@@ -886,7 +1266,6 @@ function checkAnniversary(){
   const seen = JSON.parse(localStorage.getItem(LS.SEEN_ANNIV) || '[]');
   if (seen.includes(key)) return;
 
-  // Calculate "n-th monthiversary"
   const start = new Date(CONFIG.ANNIV_YEAR, CONFIG.ANNIV_MONTH-1, CONFIG.ANNIV_DAY);
   const months = (today.getFullYear() - start.getFullYear())*12 + (today.getMonth() - start.getMonth());
   if (months < 1) return;
@@ -921,7 +1300,6 @@ function showAnniversary(monthCount, today){
   };
 }
 
-// Confetti
 let confettiAnim = null;
 function startConfetti(){
   const cv = $('#confettiCanvas');
@@ -961,7 +1339,6 @@ function startConfetti(){
       } else if (p.shape==='rect'){
         ctx.fillRect(-p.r, -p.r/2, p.r*2, p.r);
       } else {
-        // heart
         ctx.beginPath();
         const s = p.r/4;
         ctx.moveTo(0, s);
@@ -981,7 +1358,7 @@ function stopConfetti(){
 }
 
 
-// Floating hearts on anniversary day (subtle, all-day)
+// Floating hearts on anniversary day
 function startHeartLayer(){
   const today = new Date();
   if (today.getDate() !== CONFIG.ANNIV_DAY) return;
@@ -1001,7 +1378,6 @@ function startHeartLayer(){
     layer.appendChild(h);
     setTimeout(()=>h.remove(), 12000);
   };
-  // initial burst
   for (let i=0;i<8;i++) setTimeout(spawn, i*400);
   setInterval(spawn, 1800);
 }

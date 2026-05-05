@@ -186,6 +186,41 @@ a{color:inherit}
 @keyframes spin{to{transform:rotate(360deg)}}
 .sync-label{font-size:13px;letter-spacing:.05em}
 
+/* sync indicator dot */
+.sync-indicator{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:6px 10px;border-radius:999px;
+  background:rgba(10,31,68,.04);border:1px solid rgba(10,31,68,.08);
+  font-size:11px;letter-spacing:.05em;color:var(--navy-mid);
+  transition:all .25s;
+}
+.sync-indicator .sync-dot{
+  width:7px;height:7px;border-radius:50%;
+  background:#9aa6bf;
+  box-shadow:0 0 0 0 rgba(86,156,108,.5);
+}
+.sync-indicator.connected{background:rgba(86,156,108,.1);border-color:rgba(86,156,108,.25);color:#3e7050}
+.sync-indicator.connected .sync-dot{background:#56a06c;animation:syncPulse 2.5s ease-in-out infinite}
+.sync-indicator.syncing{background:rgba(201,169,97,.12);border-color:rgba(201,169,97,.3);color:#9d8240}
+.sync-indicator.syncing .sync-dot{background:var(--gold);animation:syncFastPulse 1s ease-in-out infinite}
+.sync-indicator.error{background:rgba(168,106,106,.1);border-color:rgba(168,106,106,.25);color:var(--rose-deep)}
+.sync-indicator.error .sync-dot{background:var(--rose-deep)}
+.sync-indicator.paused{background:rgba(154,166,191,.1);border-color:rgba(154,166,191,.2);color:#7a8aa8}
+.sync-indicator.paused .sync-dot{background:#9aa6bf}
+@keyframes syncPulse{0%,100%{box-shadow:0 0 0 0 rgba(86,156,108,.4)}50%{box-shadow:0 0 0 5px rgba(86,156,108,0)}}
+@keyframes syncFastPulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.3);opacity:.7}}
+@media (max-width:480px){
+  .sync-indicator .sync-text{display:none}
+}
+
+/* advanced details */
+.advanced{margin-top:8px}
+.advanced summary{cursor:pointer;padding:6px 0;list-style:none;font-style:italic}
+.advanced summary::-webkit-details-marker{display:none}
+.advanced summary::before{content:'▸ ';color:#9aa6bf;transition:transform .2s;display:inline-block}
+.advanced[open] summary::before{transform:rotate(90deg)}
+.advanced[open] summary{margin-bottom:8px}
+
 
 /* ═══════════════════════════════════════════════════════
    HERO — anniversary counter
