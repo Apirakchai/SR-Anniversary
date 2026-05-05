@@ -16,8 +16,8 @@
 // ───────────────────────────────────────────────
 const CONFIG = {
   // Google credentials (embedded — restricted to apirakchai.github.io only)
-  GOOGLE_CLIENT_ID: '462797314829-vscbflu69udrbepsr089dsrul0s6utmc.apps.googleusercontent.com',
-  GOOGLE_API_KEY:   'AIzaSyAf4J37Gxs8XP2iLDjpxX-1orCz7jddauM',
+  GOOGLE_CLIENT_ID: 'PASTE_YOUR_CLIENT_ID_HERE',
+  GOOGLE_API_KEY:   'PASTE_YOUR_API_KEY_HERE',
 
   // SHA-256 of "080121"
   PASSWORD_HASH: '118d7c585c0ca03cd5fbeb837481aa07cdf151b94714c3a90d4b28ee560540a7',
@@ -780,7 +780,7 @@ async function ensureSheetExists(){
       await ensureRequiredTabs(tabs);
       return state.google.sheetId;
     } catch(err){
-      // sheet was deleted or access lost — fall through to recreate
+      console.warn('Sheet validation failed, will recreate:', err);
       state.google.sheetId = null;
       localStorage.removeItem(LS.SHEET_ID);
     }
@@ -821,11 +821,32 @@ async function ensureSheetExists(){
 async function ensureRequiredTabs(existingTabs){
   const required = [CONFIG.TAB_STORIES, CONFIG.TAB_PHOTOS, CONFIG.TAB_BACKUPS];
   const missing = required.filter(t => !existingTabs.includes(t));
-  if (missing.length === 0) return;
 
-  const requests = missing.map(title => ({
-    addSheet: { properties: { title } }
-  }));
+  // If we have "Sheet1" or other default tab and no "Stories" tab → rename it (migration from v1)
+  const renames = [];
+  if (!existingTabs.includes(CONFIG.TAB_STORIES) && existingTabs.includes('Sheet1')){
+    // Get sheet IDs to rename Sheet1 -> Stories
+    const meta = await gapi.client.sheets.spreadsheets.get({spreadsheetId: state.google.sheetId});
+    const sheet1 = (meta.result.sheets||[]).find(s => s.properties.title === 'Sheet1');
+    if (sheet1){
+      renames.push({
+        updateSheetProperties: {
+          properties: { sheetId: sheet1.properties.sheetId, title: CONFIG.TAB_STORIES },
+          fields: 'title',
+        }
+      });
+      // Remove from missing list since we'll have it after rename
+      const idx = missing.indexOf(CONFIG.TAB_STORIES);
+      if (idx >= 0) missing.splice(idx, 1);
+    }
+  }
+
+  if (missing.length === 0 && renames.length === 0) return;
+
+  const requests = [
+    ...renames,
+    ...missing.map(title => ({ addSheet: { properties: { title } } })),
+  ];
   await gapi.client.sheets.spreadsheets.batchUpdate({
     spreadsheetId: state.google.sheetId,
     resource: { requests },
@@ -834,31 +855,26 @@ async function ensureRequiredTabs(existingTabs){
 }
 
 async function writeHeaders(){
-  const data = [
-    {
-      range: `${CONFIG.TAB_STORIES}!A1:G1`,
-      values: [['id','year','month','title','text','place','author','updatedAt']],
-    },
-    {
-      range: `${CONFIG.TAB_PHOTOS}!A1:E1`,
-      values: [['id','story_id','drive_id','name','dataURL_fallback']],
-    },
-    {
-      range: `${CONFIG.TAB_BACKUPS}!A1:D1`,
-      values: [['date','timestamp','story_count','snapshot_json']],
-    },
-  ];
-
-  // Adjust stories header range (8 cols, not 7)
-  data[0].range = `${CONFIG.TAB_STORIES}!A1:H1`;
-
-  await gapi.client.sheets.spreadsheets.values.batchUpdate({
-    spreadsheetId: state.google.sheetId,
-    resource: {
+  await Promise.all([
+    gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId: state.google.sheetId,
+      range: `${CONFIG.TAB_STORIES}!A1:H1`,
       valueInputOption: 'RAW',
-      data,
-    }
-  });
+      resource: { values: [['id','year','month','title','text','place','author','updatedAt']] },
+    }),
+    gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId: state.google.sheetId,
+      range: `${CONFIG.TAB_PHOTOS}!A1:E1`,
+      valueInputOption: 'RAW',
+      resource: { values: [['id','story_id','drive_id','name','dataURL_fallback']] },
+    }),
+    gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId: state.google.sheetId,
+      range: `${CONFIG.TAB_BACKUPS}!A1:D1`,
+      valueInputOption: 'RAW',
+      resource: { values: [['date','timestamp','story_count','snapshot_json']] },
+    }),
+  ]);
 }
 
 
@@ -869,17 +885,30 @@ async function pullFromSheet(){
   if (!state.google.sheetId) await ensureSheetExists();
   if (!state.google.sheetId) return;
 
+  // Always make sure tabs exist before reading
   try {
-    const res = await gapi.client.sheets.spreadsheets.values.batchGet({
-      spreadsheetId: state.google.sheetId,
-      ranges: [
-        `${CONFIG.TAB_STORIES}!A2:H`,
-        `${CONFIG.TAB_PHOTOS}!A2:E`,
-      ],
-    });
+    const meta = await gapi.client.sheets.spreadsheets.get({spreadsheetId: state.google.sheetId});
+    const tabs = (meta.result.sheets||[]).map(s=>s.properties.title);
+    await ensureRequiredTabs(tabs);
+  } catch(e){
+    console.warn('Cannot validate tabs, proceeding anyway:', e);
+  }
 
-    const storyRows = res.result.valueRanges?.[0]?.values || [];
-    const photoRows = res.result.valueRanges?.[1]?.values || [];
+  try {
+    // Use individual gets instead of batchGet to avoid gapi serialization issues
+    const [storiesRes, photosRes] = await Promise.all([
+      gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId: state.google.sheetId,
+        range: `${CONFIG.TAB_STORIES}!A2:H`,
+      }).catch(e => { console.warn('Stories fetch failed', e); return {result:{values:[]}}; }),
+      gapi.client.sheets.spreadsheets.values.get({
+        spreadsheetId: state.google.sheetId,
+        range: `${CONFIG.TAB_PHOTOS}!A2:E`,
+      }).catch(e => { console.warn('Photos fetch failed', e); return {result:{values:[]}}; }),
+    ]);
+
+    const storyRows = storiesRes.result?.values || [];
+    const photoRows = photosRes.result?.values  || [];
 
     const remoteStories = storyRows.map(r=>({
       id: r[0],
@@ -947,29 +976,36 @@ async function syncToSheet(){
     p.id, p.story_id, p.drive_id || '', p.name || '', p.dataURL || '',
   ]);
 
-  // Clear & rewrite both tabs
-  await gapi.client.sheets.spreadsheets.values.batchClear({
-    spreadsheetId: state.google.sheetId,
-    ranges: [
-      `${CONFIG.TAB_STORIES}!A2:H`,
-      `${CONFIG.TAB_PHOTOS}!A2:E`,
-    ],
-  });
+  // Clear & rewrite both tabs (use individual calls for reliability)
+  await Promise.all([
+    gapi.client.sheets.spreadsheets.values.clear({
+      spreadsheetId: state.google.sheetId,
+      range: `${CONFIG.TAB_STORIES}!A2:H`,
+    }),
+    gapi.client.sheets.spreadsheets.values.clear({
+      spreadsheetId: state.google.sheetId,
+      range: `${CONFIG.TAB_PHOTOS}!A2:E`,
+    }),
+  ]);
 
-  const data = [];
+  const updates = [];
   if (storyValues.length){
-    data.push({ range:`${CONFIG.TAB_STORIES}!A2`, values: storyValues });
+    updates.push(gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId: state.google.sheetId,
+      range: `${CONFIG.TAB_STORIES}!A2`,
+      valueInputOption: 'RAW',
+      resource: { values: storyValues },
+    }));
   }
   if (photoValues.length){
-    data.push({ range:`${CONFIG.TAB_PHOTOS}!A2`, values: photoValues });
-  }
-
-  if (data.length){
-    await gapi.client.sheets.spreadsheets.values.batchUpdate({
+    updates.push(gapi.client.sheets.spreadsheets.values.update({
       spreadsheetId: state.google.sheetId,
-      resource: { valueInputOption:'RAW', data },
-    });
+      range: `${CONFIG.TAB_PHOTOS}!A2`,
+      valueInputOption: 'RAW',
+      resource: { values: photoValues },
+    }));
   }
+  if (updates.length) await Promise.all(updates);
 
   localStorage.setItem(LS.LAST_SYNC, new Date().toISOString());
   updateSettingsTimes();
