@@ -6,8 +6,8 @@
 // CONFIG  ← ใส่ Client ID + API Key ตรงนี้
 // ───────────────────────────────────────────────
 const CONFIG = {
-  GOOGLE_CLIENT_ID: '462797314829-vscbflu69udrbepsr089dsrul0s6utmc.apps.googleusercontent.com',
-  GOOGLE_API_KEY:   'AIzaSyAf4J37Gxs8XP2iLDjpxX-1orCz7jddauM',
+  GOOGLE_CLIENT_ID: 'PASTE_YOUR_CLIENT_ID_HERE',
+  GOOGLE_API_KEY:   'PASTE_YOUR_API_KEY_HERE',
 
   PASSWORD_HASH: '118d7c585c0ca03cd5fbeb837481aa07cdf151b94714c3a90d4b28ee560540a7',
 
@@ -662,16 +662,20 @@ async function toggleRecord(){
 
   try {
     const stream = await navigator.mediaDevices.getUserMedia({audio: true});
-    const mr = new MediaRecorder(stream, {mimeType: pickAudioMime()});
+    const mimeType = pickAudioMime();
+    const options = mimeType ? { mimeType } : undefined;
+    const mr = new MediaRecorder(stream, options);
     rec.mediaRecorder = mr;
     rec.chunks = [];
     rec.startTime = Date.now();
 
-    mr.ondataavailable = e => { if (e.data.size > 0) rec.chunks.push(e.data); };
+    mr.ondataavailable = e => { if (e.data && e.data.size > 0) rec.chunks.push(e.data); };
     mr.onstop = ()=>{
       stream.getTracks().forEach(t=>t.stop());
       clearInterval(rec.timer);
-      const blob = new Blob(rec.chunks, {type: rec.chunks[0]?.type || 'audio/webm'});
+      // Use the actual mime type that was recorded
+      const actualMime = mr.mimeType || rec.chunks[0]?.type || 'audio/webm';
+      const blob = new Blob(rec.chunks, {type: actualMime});
       state.pendingVoiceBlob = blob;
       state.pendingVoiceDriveId = null;
       const url = URL.createObjectURL(blob);
@@ -685,7 +689,16 @@ async function toggleRecord(){
       btn.querySelector('.voice-label').textContent = 'อัดใหม่';
     };
 
-    mr.start();
+    mr.onerror = (e)=>{
+      console.error('MediaRecorder error', e);
+      toast('อัดเสียงผิดพลาด', 'error');
+      clearInterval(rec.timer);
+      stream.getTracks().forEach(t=>t.stop());
+      btn.classList.remove('recording');
+    };
+
+    // Use timeslice to get periodic chunks (helps iOS Safari)
+    mr.start(1000);
     btn.classList.add('recording');
     btn.querySelector('.voice-icon').textContent = '⏹';
     btn.querySelector('.voice-label').textContent = 'หยุดอัด';
@@ -710,9 +723,17 @@ async function toggleRecord(){
 }
 
 function pickAudioMime(){
-  const types = ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg;codecs=opus'];
-  for (const t of types) if (MediaRecorder.isTypeSupported?.(t)) return t;
-  return '';
+  // iOS Safari prefers audio/mp4 — try that first; webm has spotty support on iOS
+  const isiOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const types = isiOS
+    ? ['audio/mp4', 'audio/mp4;codecs=mp4a.40.2', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus']
+    : ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+  for (const t of types){
+    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)){
+      return t;
+    }
+  }
+  return ''; // browser default
 }
 
 
@@ -758,13 +779,23 @@ async function onSaveStory(e){
   if (state.pendingVoiceBlob && !voiceDriveId){
     if (state.google.accessToken){
       try {
-        const audioFile = new File([state.pendingVoiceBlob], `${id}_voice.webm`, {type: state.pendingVoiceBlob.type});
+        // Detect actual mime + use correct extension (iOS records as audio/mp4)
+        const mime = state.pendingVoiceBlob.type || 'audio/webm';
+        let ext = 'webm';
+        if (mime.includes('mp4')) ext = 'm4a';
+        else if (mime.includes('ogg')) ext = 'ogg';
+        else if (mime.includes('wav')) ext = 'wav';
+        const audioFile = new File([state.pendingVoiceBlob], `${id}_voice.${ext}`, {type: mime});
         const result = await uploadToDrive(audioFile);
         voiceDriveId = result.id;
       } catch(err){
         console.error('voice upload', err);
-        toast('อัปเสียงไม่สำเร็จ — เก็บใน local', '', 3000);
+        const detail = (err && err.message) ? err.message.slice(0, 80) : 'unknown';
+        toast(`อัปเสียงไม่สำเร็จ: ${detail}`, 'error', 6000);
+        // Don't fail the whole save — keep story without voice
       }
+    } else {
+      toast('ยังไม่ได้เชื่อมต่อ Google — เสียงจะไม่ถูกบันทึก', 'error', 4000);
     }
   }
 
@@ -786,9 +817,14 @@ async function onSaveStory(e){
   saveLS(LS.STORIES, state.stories);
   saveLS(LS.PHOTOS, state.photos);
 
+  let syncOk = true;
   if (state.google.accessToken){
     try { await syncToSheet(); }
-    catch(err){ console.error(err); toast('บันทึกในเครื่องแล้ว แต่ sync ไม่สำเร็จ', 'error', 4000); }
+    catch(err){
+      console.error(err);
+      syncOk = false;
+      toast('บันทึกในเครื่องแล้ว แต่ sync ไม่สำเร็จ', 'error', 4000);
+    }
   }
 
   resetForm();
@@ -796,7 +832,7 @@ async function onSaveStory(e){
   renderYearView();
   refreshFilterOptions();
   switchTab('timeline');
-  toast('บันทึกเรียบร้อย ♥', 'success');
+  if (syncOk) toast('บันทึกเรียบร้อย ♥', 'success');
 }
 
 
@@ -1800,29 +1836,47 @@ async function manualSync(){
 // ───────────────────────────────────────────────
 async function uploadToDrive(file){
   if (!state.google.accessToken) throw new Error('Not connected');
+
+  // Use Blob (works on more iOS versions than File constructor)
+  const fileName = file.name || `upload_${Date.now()}`;
+  const fileType = file.type || 'application/octet-stream';
+  const blob = file instanceof Blob ? file : new Blob([file], { type: fileType });
+
   const metadata = {
-    name: `${Date.now()}_${file.name}`,
+    name: `${Date.now()}_${fileName}`,
     parents: [CONFIG.DRIVE_FOLDER_ID],
   };
   const form = new FormData();
   form.append('metadata', new Blob([JSON.stringify(metadata)], {type:'application/json'}));
-  form.append('file', file);
+  form.append('file', blob, fileName);
 
   // Upload file (request thumbnailLink + webContentLink in response)
-  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,thumbnailLink,webContentLink', {
-    method:'POST',
-    headers:{ Authorization: `Bearer ${state.google.accessToken}` },
-    body: form,
-  });
-  if (!res.ok) throw new Error('Drive upload failed: ' + (await res.text()));
+  let res;
+  try {
+    res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,thumbnailLink,webContentLink', {
+      method:'POST',
+      headers:{ Authorization: `Bearer ${state.google.accessToken}` },
+      body: form,
+    });
+  } catch(networkErr){
+    throw new Error('Network error: ' + (networkErr.message || 'fetch failed'));
+  }
+
+  if (!res.ok){
+    let errText = '';
+    try { errText = await res.text(); } catch {}
+    throw new Error(`Drive upload failed (${res.status}): ${errText.slice(0, 100)}`);
+  }
   const data = await res.json();
 
   // Make file public so thumbnailLink works without auth
-  await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`, {
-    method:'POST',
-    headers:{ Authorization: `Bearer ${state.google.accessToken}`, 'Content-Type':'application/json' },
-    body: JSON.stringify({ role:'reader', type:'anyone' }),
-  });
+  try {
+    await fetch(`https://www.googleapis.com/drive/v3/files/${data.id}/permissions`, {
+      method:'POST',
+      headers:{ Authorization: `Bearer ${state.google.accessToken}`, 'Content-Type':'application/json' },
+      body: JSON.stringify({ role:'reader', type:'anyone' }),
+    });
+  } catch(permErr){ console.warn('Permission set failed:', permErr); }
 
   // Re-fetch metadata after permission change to get the public thumbnailLink
   let thumbnailUrl = data.thumbnailLink || '';
