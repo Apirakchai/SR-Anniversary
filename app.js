@@ -1492,6 +1492,9 @@ function initSettings(){
   $('#googleSyncNow').addEventListener('click', manualSync);
   $('#googleDisconnect').addEventListener('click', disconnectGoogle);
 
+  const resetBtn = $('#resetSheetBtn');
+  if (resetBtn) resetBtn.addEventListener('click', resetSheetId);
+
   $('#exportBtn').addEventListener('click', exportData);
   $('#importBtn').addEventListener('click', ()=>$('#importFile').click());
   $('#importFile').addEventListener('change', importData);
@@ -1499,6 +1502,21 @@ function initSettings(){
   $('#loadBackupsBtn').addEventListener('click', loadBackupList);
   $('#restoreBackupBtn').addEventListener('click', restoreSelectedBackup);
   $('#backupNowBtn').addEventListener('click', ()=>writeBackup(true));
+}
+
+async function resetSheetId(){
+  if (!confirm('ระบบจะค้นหา Sheet ใหม่จาก Drive ของคุณและ Shared with me\n\nข้อมูลในเครื่องจะไม่หาย — แต่ระบบจะ sync จาก sheet ใหม่ที่เจอ')) return;
+  state.google.sheetId = null;
+  localStorage.removeItem(LS.SHEET_ID);
+  toast('กำลังหา Sheet ใหม่...', '', 4000);
+  try {
+    await ensureSheetExists();
+    await pullFromSheet();
+    toast(`เจอ Sheet แล้ว (id: ${state.google.sheetId.slice(0,12)}...)`, 'success', 4000);
+  } catch(err){
+    console.error(err);
+    toast('หา Sheet ไม่เจอ — ขอให้คนแชร์ ส่ง share ให้ก่อน', 'error', 5000);
+  }
 }
 
 function setGoogleStatus(connected){
@@ -1685,10 +1703,42 @@ async function ensureSheetExists(){
     }
   }
 
+  // Search across My Drive AND Shared with me; pick the one with most data
   const q = `name='${CONFIG.SHEET_NAME}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
-  const found = await gapi.client.drive.files.list({ q, fields: 'files(id,name)' });
-  if (found.result.files && found.result.files.length > 0){
-    state.google.sheetId = found.result.files[0].id;
+  const found = await gapi.client.drive.files.list({
+    q,
+    fields: 'files(id,name,owners,shared,modifiedTime)',
+    spaces: 'drive',
+    corpora: 'allDrives',
+    includeItemsFromAllDrives: true,
+    supportsAllDrives: true,
+  }).catch(async () => {
+    // Fallback if allDrives params not supported
+    return await gapi.client.drive.files.list({ q, fields: 'files(id,name,owners,shared,modifiedTime)' });
+  });
+
+  const files = found.result?.files || [];
+  if (files.length > 0){
+    // Prefer the most recently modified one (likely the real one with data)
+    files.sort((a,b) => new Date(b.modifiedTime||0) - new Date(a.modifiedTime||0));
+
+    // If multiple, try each and pick the one with stories
+    let chosenFile = files[0];
+    if (files.length > 1){
+      console.log(`Found ${files.length} matching sheets, picking one with most data`);
+      for (const f of files){
+        try {
+          const r = await gapi.client.sheets.spreadsheets.values.get({
+            spreadsheetId: f.id,
+            range: `${CONFIG.TAB_STORIES}!A2:A`,
+          });
+          const rowCount = r.result?.values?.length || 0;
+          if (rowCount > 0){ chosenFile = f; break; }
+        } catch(e){ /* skip this one */ }
+      }
+    }
+
+    state.google.sheetId = chosenFile.id;
     localStorage.setItem(LS.SHEET_ID, state.google.sheetId);
     const meta = await gapi.client.sheets.spreadsheets.get({spreadsheetId: state.google.sheetId});
     const tabs = (meta.result.sheets||[]).map(s=>s.properties.title);
