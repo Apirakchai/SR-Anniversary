@@ -356,7 +356,10 @@ a{color:inherit}
 #searchInput{
   flex:1;padding:10px 16px;border-radius:999px;
   border:1px solid var(--border-soft);background:var(--bg-input);
-  color:var(--text-main);font-size:14px;
+  color:var(--text-main);font-size:16px; /* 16px+ prevents iOS zoom on focus */
+}
+@media (min-width:600px){
+  #searchInput{font-size:14px}
 }
 #searchInput:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px rgba(201,169,97,.15)}
 

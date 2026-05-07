@@ -661,6 +661,19 @@ function hydrateImages(rootEl = document){
   });
 }
 
+// Cap caches to prevent unbounded memory growth on iOS PWA
+const _MAX_CACHE_SIZE = 60;
+function _trimCache(cache){
+  while (cache.size > _MAX_CACHE_SIZE){
+    const oldestKey = cache.keys().next().value;
+    const oldUrl = cache.get(oldestKey);
+    if (oldUrl && typeof oldUrl === 'string' && oldUrl.startsWith('blob:')){
+      URL.revokeObjectURL(oldUrl);
+    }
+    cache.delete(oldestKey);
+  }
+}
+
 function upgradeThumbnailRes(url, size = 1600){
   // Drive thumbnailLink comes back as ".../=s220" by default — upgrade for retina
   if (!url) return url;
@@ -710,6 +723,7 @@ async function fetchAudioBlobUrl(driveId){
     const blob = new Blob([bytes], { type: mime });
     const url = URL.createObjectURL(blob);
     _audioBlobCache.set(driveId, url);
+    _trimCache(_audioBlobCache);
     return url;
   } catch(err){
     console.warn('fetchAudioBlobUrl failed:', err);
@@ -742,6 +756,7 @@ async function fetchImageBlobUrl(driveId){
     const blob = new Blob([bytes], { type: mime });
     const url = URL.createObjectURL(blob);
     _imageBlobCache.set(driveId, url);
+    _trimCache(_imageBlobCache);
     return url;
   } catch(err){
     console.warn('fetchImageBlobUrl failed:', err);
@@ -838,8 +853,10 @@ async function toggleRecord(){
 
       state.pendingVoiceBlob = blob;
       state.pendingVoiceDriveId = null;
-      const url = URL.createObjectURL(blob);
       const audio = $('#voicePlayback');
+      // Revoke previous URL if any (prevent memory leak)
+      if (audio.src && audio.src.startsWith('blob:')) URL.revokeObjectURL(audio.src);
+      const url = URL.createObjectURL(blob);
       audio.src = url;
       audio.classList.remove('hidden');
       $('#voiceDelete').classList.remove('hidden');
@@ -2160,9 +2177,13 @@ async function syncToSheet(){
     s.author || '', s.mood || '', s.voice_drive_id || '', s.updatedAt || '',
   ]);
 
-  const photoValues = state.photos.map(p=>[
-    p.id, p.story_id, p.drive_id || '', p.name || '', p.dataURL || '', p.thumbnail_url || '',
-  ]);
+  const photoValues = state.photos.map(p=>{
+    // dataURL fallback can be HUGE (base64) — cap at 45000 chars to fit in 1 cell.
+    // If too big, drop it (Drive ID is the real source anyway).
+    let dataURL = p.dataURL || '';
+    if (dataURL.length > 45000) dataURL = ''; // skip if won't fit
+    return [p.id, p.story_id, p.drive_id || '', p.name || '', dataURL, p.thumbnail_url || ''];
+  });
 
   await Promise.all([
     gapi.client.sheets.spreadsheets.values.clear({
@@ -2422,9 +2443,14 @@ async function writeBackup(showToast){
   try {
     const today = todayStr();
     const ts = new Date().toISOString();
+    // Don't include base64 fallback in backups — they're huge and Drive ID is enough
+    const slimPhotos = state.photos.map(p => ({
+      ...p,
+      dataURL: null, // Drop base64 — saves 100s of KB per photo
+    }));
     const snapshot = {
       stories: state.stories,
-      photos: state.photos,
+      photos: slimPhotos,
       capsules: state.capsules,
       buckets: state.buckets,
       daily: state.daily,
@@ -2435,18 +2461,31 @@ async function writeBackup(showToast){
     };
     const snapStr = JSON.stringify(snapshot);
 
+    // Sheets limit: 50,000 chars/cell. Use 45,000 to be safe, split across columns D-Z.
+    const CHUNK = 45000;
+    const chunks = [];
+    for (let i = 0; i < snapStr.length; i += CHUNK){
+      chunks.push(snapStr.slice(i, i + CHUNK));
+    }
+    if (chunks.length > 23){
+      // 23 = Z - D + 1, the columns we have to spare
+      throw new Error(`Backup too large (${snapStr.length} chars) — ${chunks.length} chunks > 23 max`);
+    }
+
+    const newRow = [today, ts, String(state.stories.length), ...chunks];
+
     const res = await gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId: state.google.sheetId,
-      range: `${CONFIG.TAB_BACKUPS}!A2:D`,
+      range: `${CONFIG.TAB_BACKUPS}!A2:Z`,
     });
     let backups = res.result.values || [];
     backups = backups.filter(r => r[0] !== today);
-    backups.unshift([today, ts, String(state.stories.length), snapStr]);
+    backups.unshift(newRow);
     backups = backups.slice(0, CONFIG.MAX_BACKUPS);
 
     await gapi.client.sheets.spreadsheets.values.clear({
       spreadsheetId: state.google.sheetId,
-      range: `${CONFIG.TAB_BACKUPS}!A2:D`,
+      range: `${CONFIG.TAB_BACKUPS}!A2:Z`,
     });
     if (backups.length){
       await gapi.client.sheets.spreadsheets.values.update({
@@ -2460,10 +2499,10 @@ async function writeBackup(showToast){
     localStorage.setItem(LS.BACKUP_DAY, today);
     localStorage.setItem(LS.LAST_BACKUP, ts);
     updateSettingsTimes();
-    if (showToast) toast(`Backup สำเร็จ (เก็บไว้ ${backups.length} วัน)`, 'success');
+    if (showToast) toast(`Backup สำเร็จ (${(snapStr.length/1024).toFixed(0)}KB · ${chunks.length} chunks)`, 'success');
   } catch(err){
     console.error('backup error', err);
-    if (showToast) toast('Backup ไม่สำเร็จ', 'error');
+    if (showToast) toast('Backup ไม่สำเร็จ: ' + (err.message||'unknown'), 'error', 5000);
   }
 }
 
@@ -2473,7 +2512,7 @@ async function loadBackupList(){
   try {
     const res = await gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId: state.google.sheetId,
-      range: `${CONFIG.TAB_BACKUPS}!A2:D`,
+      range: `${CONFIG.TAB_BACKUPS}!A2:Z`,
     });
     const backups = res.result.values || [];
     const sel = $('#backupSelect');
@@ -2504,7 +2543,9 @@ async function restoreSelectedBackup(){
   if (!row){ toast('ไม่พบ backup ที่เลือก', 'error'); return; }
   if (!confirm(`กู้คืนข้อมูลของวันที่ ${row[0]}?\n(${row[2]} stories)\n\nข้อมูลปัจจุบันจะถูกแทนที่`)) return;
   try {
-    const snap = JSON.parse(row[3]);
+    // Concat columns D-Z (index 3 onwards) — backup may be split into multiple cells
+    const jsonStr = row.slice(3).join('');
+    const snap = JSON.parse(jsonStr);
     state.stories = snap.stories || [];
     state.photos = snap.photos || [];
     state.capsules = snap.capsules || [];
@@ -2641,8 +2682,40 @@ function generateBook(){
   // Generate combined book(s) — open in new window for print
   let combined = books.map(b => buildBookHTML(b)).join('<div style="page-break-after:always"></div>');
 
+  // iOS PWA blocks window.open — use blob URL approach instead
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+  if (isIOS && isStandalone){
+    // Fall back: download as HTML file user can open externally
+    const blob = new Blob([combined], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `OurStory_${new Date().toISOString().slice(0,10)}.html`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    toast('ดาวน์โหลดไฟล์แล้ว — เปิดใน Safari แล้วใช้ Print', 'success', 6000);
+    return;
+  }
+
   const w = window.open('', '_blank');
-  if (!w){ toast('กรุณาอนุญาต popup', 'error'); return; }
+  if (!w){
+    // popup blocked — fallback to download
+    const blob = new Blob([combined], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `OurStory_${new Date().toISOString().slice(0,10)}.html`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    toast('Popup ถูก block — ดาวน์โหลดไฟล์แทน', '', 4000);
+    return;
+  }
   w.document.write(combined);
   w.document.close();
   setTimeout(()=>{ w.focus(); w.print(); }, 800);
