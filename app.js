@@ -30,7 +30,7 @@ const CONFIG = {
 
   VOICE_MAX_MS: 30 * 1000,
 
-  SCOPES: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file',
+  SCOPES: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive',
   DISCOVERY_DOCS: ['https://sheets.googleapis.com/$discovery/rest?version=v4',
                    'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
 };
@@ -1703,21 +1703,23 @@ async function ensureSheetExists(){
     }
   }
 
-  // Search across My Drive AND Shared with me; pick the one with most data
+  // Search across My Drive AND Shared with me (default behavior is both)
   const q = `name='${CONFIG.SHEET_NAME}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
-  const found = await gapi.client.drive.files.list({
-    q,
-    fields: 'files(id,name,owners,shared,modifiedTime)',
-    spaces: 'drive',
-    corpora: 'allDrives',
-    includeItemsFromAllDrives: true,
-    supportsAllDrives: true,
-  }).catch(async () => {
-    // Fallback if allDrives params not supported
-    return await gapi.client.drive.files.list({ q, fields: 'files(id,name,owners,shared,modifiedTime)' });
-  });
+  let found;
+  try {
+    found = await gapi.client.drive.files.list({
+      q,
+      fields: 'files(id,name,owners,shared,modifiedTime)',
+      pageSize: 50,
+    });
+  } catch(searchErr){
+    console.error('Drive search failed', searchErr);
+    throw new Error('Drive search failed: ' + (searchErr?.message || 'unknown'));
+  }
 
   const files = found.result?.files || [];
+  console.log(`Drive search found ${files.length} matching sheets`);
+
   if (files.length > 0){
     // Prefer the most recently modified one (likely the real one with data)
     files.sort((a,b) => new Date(b.modifiedTime||0) - new Date(a.modifiedTime||0));
@@ -1733,8 +1735,9 @@ async function ensureSheetExists(){
             range: `${CONFIG.TAB_STORIES}!A2:A`,
           });
           const rowCount = r.result?.values?.length || 0;
+          console.log(`Sheet ${f.id}: ${rowCount} stories`);
           if (rowCount > 0){ chosenFile = f; break; }
-        } catch(e){ /* skip this one */ }
+        } catch(e){ console.warn('skip sheet', f.id, e); }
       }
     }
 
