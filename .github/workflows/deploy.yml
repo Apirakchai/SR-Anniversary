@@ -1,0 +1,63 @@
+name: Deploy to GitHub Pages
+
+on:
+  # Run on push to main
+  push:
+    branches: [main]
+
+  # Allow manual trigger from Actions tab
+  workflow_dispatch:
+
+# Required permissions for GitHub Pages deployment
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one deploy at a time
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Inject secrets into app.js
+        run: |
+          if grep -q "PASTE_YOUR_CLIENT_ID_HERE" app.js; then
+            sed -i "s|PASTE_YOUR_CLIENT_ID_HERE|${{ secrets.GOOGLE_CLIENT_ID }}|g" app.js
+            echo "✓ Injected GOOGLE_CLIENT_ID"
+          fi
+          if grep -q "PASTE_YOUR_API_KEY_HERE" app.js; then
+            sed -i "s|PASTE_YOUR_API_KEY_HERE|${{ secrets.GOOGLE_API_KEY }}|g" app.js
+            echo "✓ Injected GOOGLE_API_KEY"
+          fi
+          # Verify no placeholder leftover
+          if grep -q "PASTE_YOUR" app.js; then
+            echo "::error::Found unreplaced placeholder in app.js"
+            exit 1
+          fi
+          echo "✓ All placeholders replaced"
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
