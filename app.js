@@ -398,17 +398,90 @@ function stopMusic(){
 
 
 // ───────────────────────────────────────────────
-// TABS
+// TABS + NAVIGATION (groups + sub-tabs + FAB)
 // ───────────────────────────────────────────────
+
+// แต่ละ tab อยู่ใน group ไหน
+const TAB_GROUPS = {
+  timeline:'stories', year:'stories', map:'stories',
+  notes:'connect',  qotd:'connect',  daily:'connect',
+  stats:'insights', bucket:'insights',
+  ideas:'special',  capsule:'special',
+  settings:'settings',
+  add:null, // add ไม่อยู่ในกลุ่ม - เปิดผ่าน FAB
+};
+
+// tab default ของแต่ละกลุ่ม (กดที่ bottom nav แล้วเข้าหน้านี้ก่อน)
+const GROUP_DEFAULT_TAB = {
+  stories:'timeline',
+  connect:'notes',
+  insights:'stats',
+  special:'ideas',
+  settings:'settings',
+};
+
 function initTabs(){
+  // Sub-tab buttons
   $$('.tab').forEach(t=>{
     t.addEventListener('click', ()=>switchTab(t.dataset.tab));
   });
+  // [data-go] shortcuts (ใน modals/buttons ต่างๆ)
   $$('[data-go]').forEach(b=>b.addEventListener('click', ()=>switchTab(b.dataset.go)));
+
+  // Bottom nav buttons (group switching)
+  $$('.bnav-btn').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const group = b.dataset.group;
+      const directTab = b.dataset.tab; // settings มี data-tab ตรงๆ
+      if (directTab){
+        switchTab(directTab);
+      } else {
+        switchGroup(group);
+      }
+    });
+  });
+
+  // FAB → เปิด add form
+  const fab = document.getElementById('fabAdd');
+  if (fab) fab.addEventListener('click', ()=>switchTab('add'));
 }
-function switchTab(name){
+
+// เปลี่ยน group → แสดง sub-tabs ของ group นั้น + เปิด tab default
+function switchGroup(group){
+  // Toggle bottom nav active state
+  $$('.bnav-btn').forEach(b=>b.classList.toggle('active', b.dataset.group===group));
+  // Toggle sub-tab group visibility
+  $$('.subtab-group').forEach(g=>g.classList.toggle('hidden', g.dataset.group!==group));
+  // Open default tab of that group
+  const defaultTab = GROUP_DEFAULT_TAB[group];
+  if (defaultTab) switchTab(defaultTab, /*skipGroupSync*/true);
+}
+
+// เปลี่ยน tab + sync group + sync FAB visibility
+function switchTab(name, skipGroupSync){
+  // Sub-tab pill active state
   $$('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
+  // Tab panel visibility
   $$('.tab-panel').forEach(p=>p.classList.toggle('active', p.id===`tab-${name}`));
+
+  // Auto-sync bottom nav + sub-tab group (ถ้าไม่ได้มาจาก switchGroup)
+  if (!skipGroupSync){
+    const group = TAB_GROUPS[name];
+    if (group){
+      $$('.bnav-btn').forEach(b=>b.classList.toggle('active', b.dataset.group===group));
+      $$('.subtab-group').forEach(g=>g.classList.toggle('hidden', g.dataset.group!==group));
+    } else if (name === 'add'){
+      // 'add' ไม่อยู่ใน group ใดๆ → ซ่อนทุก sub-tab + ไม่ highlight bottom nav
+      $$('.bnav-btn').forEach(b=>b.classList.remove('active'));
+      $$('.subtab-group').forEach(g=>g.classList.add('hidden'));
+    }
+  }
+
+  // ซ่อน FAB ตอนอยู่หน้า add หรือ settings
+  const fab = document.getElementById('fabAdd');
+  if (fab) fab.classList.toggle('hidden', name==='add' || name==='settings');
+
+  // Render hooks (เดิม)
   if (name === 'add' && !state.editingId) resetForm();
   if (name === 'year') renderYearView();
   if (name === 'capsule') renderCapsules();
@@ -4326,7 +4399,7 @@ function renderNotes(){
 
   if (recipientEl) recipientEl.textContent = state.user === 'Safe' ? 'Ruang' : 'Safe';
 
-  // Inbox count badge
+  // Inbox count badge (in Notes tab)
   const unreadCount = state.notes.filter(n => n.to === state.user && !n.readAt).length;
   if (badge){
     if (unreadCount > 0){
@@ -4334,6 +4407,16 @@ function renderNotes(){
       badge.classList.remove('hidden');
     } else {
       badge.classList.add('hidden');
+    }
+  }
+  // Sync to bottom nav Connect badge
+  const navBadge = document.getElementById('notesBadge');
+  if (navBadge){
+    if (unreadCount > 0){
+      navBadge.textContent = unreadCount > 9 ? '9+' : unreadCount;
+      navBadge.classList.remove('hidden');
+    } else {
+      navBadge.classList.add('hidden');
     }
   }
 

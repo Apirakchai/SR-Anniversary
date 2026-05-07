@@ -320,29 +320,126 @@ a{color:inherit}
 
 
 /* ═══════════════════════════════════════════════════════
-   TOOLBAR / TABS
+   SUB-TABS (top, changes by active group)
 ═══════════════════════════════════════════════════════ */
-.toolbar{
-  display:flex;gap:6px;justify-content:center;
-  padding:18px 14px 0;
+.subtabs{
+  display:flex;gap:6px;justify-content:center;align-items:center;
+  padding:14px 14px 4px;
   position:sticky;top:calc(var(--safe-top) + 56px);z-index:40;
-  background:linear-gradient(to bottom, var(--bg-app) 60%, transparent);
-  flex-wrap:wrap;
+  background:linear-gradient(to bottom, var(--bg-app) 70%, transparent);
+  min-height:48px;
 }
+.subtab-group{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;animation:fadeIn .25s}
+.subtab-group.hidden{display:none}
+
 .tab{
-  padding:9px 14px;border-radius:999px;
+  padding:8px 14px;border-radius:999px;
   font-size:12px;font-weight:500;letter-spacing:.03em;
   background:transparent;color:var(--text-soft);
   border:1px solid var(--border-soft);
-  transition:all .22s;white-space:nowrap;
+  transition:all .22s;white-space:nowrap;cursor:pointer;
 }
 .tab:hover{background:rgba(0,0,0,.06)}
 [data-theme="midnight"] .tab:hover{background:rgba(255,255,255,.05)}
-.tab.active{background:var(--text-main);color:var(--bg-app);border-color:var(--text-main);box-shadow:0 6px 16px -8px rgba(0,0,0,.4)}
+.tab.active{
+  background:var(--text-main);color:var(--bg-app);
+  border-color:var(--text-main);
+  box-shadow:0 6px 16px -8px rgba(0,0,0,.4);
+}
 
-.tab-panel{display:none;padding:24px 20px 60px;max-width:980px;margin:0 auto}
+.tab-panel{display:none;padding:18px 20px 110px;max-width:980px;margin:0 auto}
 .tab-panel.active{display:block;animation:fadeIn .3s}
 @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+/* ═══════════════════════════════════════════════════════
+   BOTTOM NAVIGATION (5 main groups)
+═══════════════════════════════════════════════════════ */
+.bottom-nav{
+  position:fixed;bottom:0;left:0;right:0;z-index:60;
+  display:flex;justify-content:space-around;align-items:stretch;
+  background:var(--bg-app);
+  border-top:1px solid var(--border-soft);
+  padding:6px 4px calc(8px + var(--safe-bottom, 0px));
+  backdrop-filter:blur(12px);
+  -webkit-backdrop-filter:blur(12px);
+}
+[data-theme="midnight"] .bottom-nav{background:rgba(8,16,36,.95)}
+[data-theme="sunset"] .bottom-nav{background:rgba(28,18,32,.95)}
+
+.bnav-btn{
+  flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;
+  padding:6px 4px;background:transparent;border:none;cursor:pointer;
+  color:var(--text-soft);transition:all .2s;position:relative;
+  border-radius:8px;min-height:52px;
+}
+.bnav-btn:hover{background:rgba(0,0,0,.04)}
+[data-theme="midnight"] .bnav-btn:hover{background:rgba(255,255,255,.04)}
+.bnav-btn.active{color:var(--gold)}
+.bnav-btn.active .bnav-ico{transform:scale(1.1)}
+
+.bnav-ico{
+  font-size:20px;line-height:1;
+  transition:transform .25s cubic-bezier(.34,1.56,.64,1);
+}
+.bnav-lbl{
+  font-size:10px;font-weight:500;letter-spacing:.02em;
+  font-family:'Sarabun',sans-serif;
+}
+
+.bnav-badge{
+  position:absolute;top:2px;right:18%;
+  min-width:16px;height:16px;padding:0 4px;
+  background:#e63946;color:#fff;
+  border-radius:999px;font-size:10px;font-weight:600;
+  display:flex;align-items:center;justify-content:center;
+  border:1.5px solid var(--bg-app);
+}
+.bnav-badge.hidden{display:none}
+
+/* ═══════════════════════════════════════════════════════
+   FLOATING ACTION BUTTON (Add Story)
+═══════════════════════════════════════════════════════ */
+.fab-add{
+  position:fixed;
+  right:20px;
+  bottom:calc(78px + var(--safe-bottom, 0px));
+  z-index:55;
+  width:56px;height:56px;border-radius:50%;
+  background:var(--gold);color:var(--navy);
+  border:none;cursor:pointer;
+  box-shadow:0 8px 22px -6px rgba(201,169,97,.55), 0 4px 10px rgba(0,0,0,.15);
+  display:flex;align-items:center;justify-content:center;
+  transition:all .25s cubic-bezier(.34,1.56,.64,1);
+}
+.fab-add:hover{transform:scale(1.08) rotate(90deg)}
+.fab-add:active{transform:scale(.95)}
+.fab-plus{
+  font-size:30px;font-weight:300;line-height:1;
+  margin-top:-2px;
+}
+
+/* Hide FAB when on Add or Settings tab */
+.fab-add.hidden{display:none}
+
+/* ═══════════════════════════════════════════════════════
+   RESPONSIVE — desktop layout
+═══════════════════════════════════════════════════════ */
+@media (min-width: 768px){
+  .bottom-nav{
+    /* On desktop: still bottom but more padded, narrower */
+    max-width:680px;left:50%;transform:translateX(-50%);
+    border-radius:18px 18px 0 0;
+    border:1px solid var(--border-soft);
+    border-bottom:none;
+    box-shadow:0 -4px 24px -8px rgba(0,0,0,.15);
+  }
+  .bnav-lbl{font-size:11px}
+  .bnav-ico{font-size:22px}
+  .fab-add{
+    right:calc(50% - 360px);
+    bottom:90px;
+  }
+}
 
 
 /* ═══════════════════════════════════════════════════════
@@ -786,7 +883,7 @@ a{color:inherit}
 ═══════════════════════════════════════════════════════ */
 @media print{
   body{background:#fff;color:#000}
-  .topbar,.toolbar,.foot,.heart-layer,.seasonal-layer,.onthisday,.modal,.anniv,#tab-add,#tab-settings,#tab-capsule,#tab-year{display:none !important}
+  .topbar,.toolbar,.subtabs,.bottom-nav,.fab-add,.foot,.heart-layer,.seasonal-layer,.onthisday,.modal,.anniv,#tab-add,#tab-settings,#tab-capsule,#tab-year{display:none !important}
   .hero{break-inside:avoid;page-break-after:always}
   .story-card{break-inside:avoid;box-shadow:none;border:1px solid #ccc;margin-bottom:18px}
 }

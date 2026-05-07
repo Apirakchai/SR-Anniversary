@@ -123,19 +123,62 @@
     </div>
   </div>
 
-  <nav class="toolbar">
-    <button class="tab active" data-tab="timeline">📖 Timeline</button>
-    <button class="tab" data-tab="year">📅 Year</button>
-    <button class="tab" data-tab="add">＋ เพิ่ม</button>
-    <button class="tab" data-tab="map">🗺️ Map</button>
-    <button class="tab" data-tab="stats">📊 Stats</button>
-    <button class="tab" data-tab="notes">💬 Notes</button>
-    <button class="tab" data-tab="qotd">❓ Q&amp;A</button>
-    <button class="tab" data-tab="daily">📝 Daily</button>
-    <button class="tab" data-tab="bucket">🎯 Bucket</button>
-    <button class="tab" data-tab="ideas">🎲 Ideas</button>
-    <button class="tab" data-tab="capsule">💌 Capsule</button>
-    <button class="tab" data-tab="settings">⚙</button>
+  <!-- Sub-tabs (changes based on active group) -->
+  <nav class="subtabs" id="subtabs">
+    <!-- Stories group (default) -->
+    <div class="subtab-group" data-group="stories">
+      <button class="tab active" data-tab="timeline">📖 Timeline</button>
+      <button class="tab" data-tab="year">📅 Year</button>
+      <button class="tab" data-tab="map">🗺️ Map</button>
+    </div>
+    <!-- Connect group -->
+    <div class="subtab-group hidden" data-group="connect">
+      <button class="tab" data-tab="notes">💬 Notes</button>
+      <button class="tab" data-tab="qotd">❓ Q&amp;A</button>
+      <button class="tab" data-tab="daily">📝 Daily</button>
+    </div>
+    <!-- Insights group -->
+    <div class="subtab-group hidden" data-group="insights">
+      <button class="tab" data-tab="stats">📊 Stats</button>
+      <button class="tab" data-tab="bucket">🎯 Bucket List</button>
+    </div>
+    <!-- Special group -->
+    <div class="subtab-group hidden" data-group="special">
+      <button class="tab" data-tab="ideas">🎲 Ideas</button>
+      <button class="tab" data-tab="capsule">💌 Capsule</button>
+    </div>
+    <!-- Settings group (no sub-tabs) -->
+    <div class="subtab-group hidden" data-group="settings"></div>
+  </nav>
+
+  <!-- Floating Action Button - เพิ่ม story (always visible) -->
+  <button id="fabAdd" class="fab-add" data-tab="add" aria-label="เพิ่ม Story ใหม่">
+    <span class="fab-plus">＋</span>
+  </button>
+
+  <!-- Bottom Navigation (mobile-first, 5 groups) -->
+  <nav class="bottom-nav" id="bottomNav">
+    <button class="bnav-btn active" data-group="stories">
+      <span class="bnav-ico">📖</span>
+      <span class="bnav-lbl">Stories</span>
+    </button>
+    <button class="bnav-btn" data-group="connect">
+      <span class="bnav-ico">💬</span>
+      <span class="bnav-lbl">Connect</span>
+      <span class="bnav-badge hidden" id="notesBadge">0</span>
+    </button>
+    <button class="bnav-btn" data-group="insights">
+      <span class="bnav-ico">📊</span>
+      <span class="bnav-lbl">Insights</span>
+    </button>
+    <button class="bnav-btn" data-group="special">
+      <span class="bnav-ico">✨</span>
+      <span class="bnav-lbl">Special</span>
+    </button>
+    <button class="bnav-btn" data-group="settings" data-tab="settings">
+      <span class="bnav-ico">⚙</span>
+      <span class="bnav-lbl">Settings</span>
+    </button>
   </nav>
 
   <!-- TAB: TIMELINE -->
