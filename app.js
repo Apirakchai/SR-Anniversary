@@ -602,9 +602,15 @@ function hydrateImages(rootEl = document){
     const driveId = img.dataset.driveId;
     if (!driveId || img.dataset.hydrated === '1') return;
     img.dataset.hydrated = '1';
+    // Fade in once loaded
+    img.style.opacity = '0.3';
+    img.style.transition = 'opacity .3s';
     fetchImageBlobUrl(driveId).then(url => {
-      if (url) img.src = url;
-    }).catch(()=>{ /* keep placeholder src */ });
+      if (url){
+        img.src = url;
+        img.style.opacity = '1';
+      }
+    }).catch(()=>{ img.style.opacity = '1'; });
   });
 }
 
@@ -635,20 +641,26 @@ async function fetchAudioBlobUrl(driveId){
     return _audioBlobCache.get(driveId);
   }
   if (!state.google.accessToken) return driveAudioUrl(driveId);
+  if (!gapi?.client?.drive){
+    console.warn('Drive API not loaded yet');
+    return driveAudioUrl(driveId);
+  }
 
   try {
-    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${driveId}?alt=media`, {
-      headers: { Authorization: `Bearer ${state.google.accessToken}` },
+    const resp = await gapi.client.drive.files.get({
+      fileId: driveId,
+      alt: 'media',
     });
-    if (!res.ok) throw new Error('fetch failed: ' + res.status);
-    const rawBlob = await res.blob();
-    // Force a known audio MIME type — iOS chokes on application/octet-stream
-    let mime = rawBlob.type;
+    const raw = resp.body;
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i) & 0xff;
+
+    const headerMime = resp.headers?.['Content-Type'] || resp.headers?.['content-type'] || '';
+    let mime = headerMime;
     if (!mime || mime === 'application/octet-stream' || !mime.startsWith('audio/')){
-      // Pick best guess based on what iOS Safari + Chrome can both play
       mime = 'audio/mp4';
     }
-    const blob = new Blob([rawBlob], { type: mime });
+    const blob = new Blob([bytes], { type: mime });
     const url = URL.createObjectURL(blob);
     _audioBlobCache.set(driveId, url);
     return url;
@@ -664,13 +676,23 @@ async function fetchImageBlobUrl(driveId){
     return _imageBlobCache.get(driveId);
   }
   if (!state.google.accessToken) return '';
+  if (!gapi?.client?.drive){
+    console.warn('Drive API not loaded yet for image fetch');
+    return '';
+  }
 
   try {
-    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${driveId}?alt=media`, {
-      headers: { Authorization: `Bearer ${state.google.accessToken}` },
+    const resp = await gapi.client.drive.files.get({
+      fileId: driveId,
+      alt: 'media',
     });
-    if (!res.ok) throw new Error('fetch failed: ' + res.status);
-    const blob = await res.blob();
+    const raw = resp.body;
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i) & 0xff;
+
+    const headerMime = resp.headers?.['Content-Type'] || resp.headers?.['content-type'] || '';
+    const mime = (headerMime && headerMime.startsWith('image/')) ? headerMime : 'image/jpeg';
+    const blob = new Blob([bytes], { type: mime });
     const url = URL.createObjectURL(blob);
     _imageBlobCache.set(driveId, url);
     return url;
