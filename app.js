@@ -6,8 +6,8 @@
 // CONFIG  ← ใส่ Client ID + API Key ตรงนี้
 // ───────────────────────────────────────────────
 const CONFIG = {
-  GOOGLE_CLIENT_ID: '462797314829-vscbflu69udrbepsr089dsrul0s6utmc.apps.googleusercontent.com',
-  GOOGLE_API_KEY:   'AIzaSyAf4J37Gxs8XP2iLDjpxX-1orCz7jddauM',
+  GOOGLE_CLIENT_ID: 'PASTE_YOUR_CLIENT_ID_HERE',
+  GOOGLE_API_KEY:   'PASTE_YOUR_API_KEY_HERE',
 
   PASSWORD_HASH: '118d7c585c0ca03cd5fbeb837481aa07cdf151b94714c3a90d4b28ee560540a7',
 
@@ -676,6 +676,17 @@ async function toggleRecord(){
       // Use the actual mime type that was recorded
       const actualMime = mr.mimeType || rec.chunks[0]?.type || 'audio/webm';
       const blob = new Blob(rec.chunks, {type: actualMime});
+
+      btn.classList.remove('recording');
+
+      if (blob.size === 0){
+        toast('ไมค์ใน PWA อาจถูกบล็อก — ลองอัดใน Safari แทน หรือ Settings → Safari → Microphone', 'error', 8000);
+        $('#voiceMeter').classList.add('hidden');
+        btn.querySelector('.voice-icon').textContent = '🎙️';
+        btn.querySelector('.voice-label').textContent = 'ลองอีกครั้ง';
+        return;
+      }
+
       state.pendingVoiceBlob = blob;
       state.pendingVoiceDriveId = null;
       const url = URL.createObjectURL(blob);
@@ -684,9 +695,8 @@ async function toggleRecord(){
       audio.classList.remove('hidden');
       $('#voiceDelete').classList.remove('hidden');
       $('#voiceMeter').classList.add('hidden');
-      btn.classList.remove('recording');
       btn.querySelector('.voice-icon').textContent = '🔄';
-      btn.querySelector('.voice-label').textContent = 'อัดใหม่';
+      btn.querySelector('.voice-label').textContent = `อัดใหม่ (${(blob.size/1024).toFixed(0)}KB)`;
     };
 
     mr.onerror = (e)=>{
@@ -777,25 +787,31 @@ async function onSaveStory(e){
   // Voice note: upload if new blob
   let voiceDriveId = state.pendingVoiceDriveId;
   if (state.pendingVoiceBlob && !voiceDriveId){
-    if (state.google.accessToken){
-      try {
-        // Detect actual mime + use correct extension (iOS records as audio/mp4)
-        const mime = state.pendingVoiceBlob.type || 'audio/webm';
-        let ext = 'webm';
-        if (mime.includes('mp4')) ext = 'm4a';
-        else if (mime.includes('ogg')) ext = 'ogg';
-        else if (mime.includes('wav')) ext = 'wav';
-        const audioFile = new File([state.pendingVoiceBlob], `${id}_voice.${ext}`, {type: mime});
-        const result = await uploadToDrive(audioFile);
-        voiceDriveId = result.id;
-      } catch(err){
-        console.error('voice upload', err);
-        const detail = (err && err.message) ? err.message.slice(0, 80) : 'unknown';
-        toast(`อัปเสียงไม่สำเร็จ: ${detail}`, 'error', 6000);
-        // Don't fail the whole save — keep story without voice
-      }
-    } else {
+    if (!state.google.accessToken){
       toast('ยังไม่ได้เชื่อมต่อ Google — เสียงจะไม่ถูกบันทึก', 'error', 4000);
+    } else {
+      // Diagnostic: check blob is valid
+      const blobSize = state.pendingVoiceBlob.size || 0;
+      if (blobSize === 0){
+        toast('เสียงที่อัดได้ขนาด 0 — iOS PWA อาจ block ไมค์ ลองอัดใน Safari แทน', 'error', 7000);
+      } else if (blobSize < 500){
+        toast(`เสียงที่อัดสั้นเกินไป (${blobSize} bytes) — ลองอัดใหม่`, 'error', 5000);
+      } else {
+        try {
+          const mime = state.pendingVoiceBlob.type || 'audio/webm';
+          let ext = 'webm';
+          if (mime.includes('mp4'))  ext = 'm4a';
+          else if (mime.includes('ogg')) ext = 'ogg';
+          else if (mime.includes('wav')) ext = 'wav';
+          const audioFile = new File([state.pendingVoiceBlob], `${id}_voice.${ext}`, {type: mime});
+          const result = await uploadToDrive(audioFile);
+          voiceDriveId = result.id;
+        } catch(err){
+          console.error('voice upload', err);
+          const detail = (err && err.message) ? err.message.slice(0, 100) : 'unknown';
+          toast(`อัปเสียงไม่สำเร็จ: ${detail}`, 'error', 8000);
+        }
+      }
     }
   }
 
@@ -1391,6 +1407,7 @@ function initGoogleAPI(clientId, apiKey){
         try {
           const tk = JSON.parse(cached);
           if (tk.expires_at && tk.expires_at > Date.now() + 60000){
+            // Token still valid — use it directly
             state.google.accessToken = tk.access_token;
             gapi.client.setToken({access_token: tk.access_token});
             setGoogleStatus(true);
@@ -1398,8 +1415,18 @@ function initGoogleAPI(clientId, apiKey){
             await pullFromSheet();
             startAutoSync();
             startBackupTimer();
+            scheduleTokenRefresh(tk.expires_at);
             updateSettingsTimes();
             return;
+          } else if (tk.access_token){
+            // Token expired — try silent refresh (no popup)
+            console.log('Token expired, attempting silent refresh...');
+            try {
+              await silentRefreshToken();
+              return;
+            } catch(e){
+              console.warn('Silent refresh failed, need user interaction:', e);
+            }
           }
         } catch(e){}
       }
@@ -1412,11 +1439,56 @@ function initGoogleAPI(clientId, apiKey){
   });
 }
 
+function silentRefreshToken(){
+  // Request a new token without consent prompt — works if user already consented before
+  return new Promise((resolve, reject)=>{
+    if (!state.google.tokenClient){ reject(new Error('No token client')); return; }
+    // Override callback temporarily to capture this specific result
+    const origCallback = state.google.tokenClient.callback;
+    state.google.tokenClient.callback = (resp)=>{
+      state.google.tokenClient.callback = origCallback;
+      if (resp.error){
+        reject(new Error(resp.error));
+      } else {
+        tokenCallback(resp).then(resolve).catch(reject);
+      }
+    };
+    try {
+      // Empty prompt = silent refresh (no UI shown if already authorized)
+      state.google.tokenClient.requestAccessToken({prompt: ''});
+    } catch(e){
+      state.google.tokenClient.callback = origCallback;
+      reject(e);
+    }
+  });
+}
+
+let _tokenRefreshTimer = null;
+function scheduleTokenRefresh(expiresAt){
+  if (_tokenRefreshTimer){ clearTimeout(_tokenRefreshTimer); _tokenRefreshTimer = null; }
+  // Refresh 5 minutes before expiry
+  const refreshAt = expiresAt - 5 * 60 * 1000;
+  const delay = Math.max(10000, refreshAt - Date.now()); // at least 10s
+  console.log(`Token refresh scheduled in ${Math.round(delay/60000)} min`);
+  _tokenRefreshTimer = setTimeout(async ()=>{
+    console.log('Auto-refreshing token...');
+    try {
+      await silentRefreshToken();
+      console.log('Token refreshed silently');
+    } catch(err){
+      console.warn('Silent refresh failed:', err);
+      // Don't bug the user — the existing token might still work for a few more minutes
+      // and any operation will trigger a popup if it really fails
+    }
+  }, delay);
+}
+
 function connectGoogle(){
   if (!state.google.tokenClient){
     toast('ยังโหลด Google API ไม่เสร็จ — รอสักครู่', 'error');
     return;
   }
+  // First time: use 'consent' to get full grant; subsequent times silent refresh handles it
   state.google.tokenClient.requestAccessToken({prompt: 'consent'});
 }
 
@@ -1430,18 +1502,24 @@ async function tokenCallback(resp){
   state.google.accessToken = resp.access_token;
   gapi.client.setToken({access_token: resp.access_token});
 
+  const expiresAt = Date.now() + (resp.expires_in||3600)*1000;
   localStorage.setItem(LS.TOKEN, JSON.stringify({
     access_token: resp.access_token,
-    expires_at: Date.now() + (resp.expires_in||3600)*1000,
+    expires_at: expiresAt,
   }));
   setGoogleStatus(true);
   setSyncIndicator('connected', 'connected');
-  toast('เชื่อมต่อสำเร็จ ✓', 'success');
+
+  // Only show connect toast if it's a fresh connection (not a silent refresh)
+  const wasSilent = resp._wasSilent;
+  if (!wasSilent) toast('เชื่อมต่อสำเร็จ ✓', 'success');
+
+  scheduleTokenRefresh(expiresAt);
 
   await ensureSheetExists();
   await pullFromSheet();
-  startAutoSync();
-  startBackupTimer();
+  if (!state.syncTimer) startAutoSync();
+  if (!state.backupTimer) startBackupTimer();
   updateSettingsTimes();
 }
 
@@ -1809,7 +1887,23 @@ async function autoSyncTick(){
     setSyncIndicator('connected', 'connected');
   } catch(err){
     console.warn('auto-sync error', err);
-    setSyncIndicator('error', 'sync failed');
+    // Check if it's a 401 auth error → try silent refresh once
+    const status = err?.status || err?.result?.error?.code;
+    if (status === 401 || status === 403){
+      console.log('Auth error during sync, attempting silent refresh...');
+      try {
+        await silentRefreshToken();
+        // Retry sync after successful refresh
+        await pullFromSheet();
+        await syncToSheet();
+        setSyncIndicator('connected', 'connected');
+      } catch(refreshErr){
+        console.warn('Silent refresh also failed', refreshErr);
+        setSyncIndicator('error', 'sync failed');
+      }
+    } else {
+      setSyncIndicator('error', 'sync failed');
+    }
   } finally {
     state.isSyncing = false;
   }
