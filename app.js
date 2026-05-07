@@ -608,7 +608,34 @@ function driveImageUrl(driveId){
 }
 
 function driveAudioUrl(driveId){
+  // Legacy fallback — may not always work, will be replaced by blob URL via fetchAudioBlob
   return `https://drive.google.com/uc?id=${driveId}&export=download`;
+}
+
+// Cache of blob URLs we created so we don't refetch the same file twice in one session
+const _audioBlobCache = new Map();
+
+async function fetchAudioBlobUrl(driveId){
+  if (!driveId) return '';
+  // Return cached URL if available
+  if (_audioBlobCache.has(driveId)){
+    return _audioBlobCache.get(driveId);
+  }
+  if (!state.google.accessToken) return driveAudioUrl(driveId); // fallback
+
+  try {
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${driveId}?alt=media`, {
+      headers: { Authorization: `Bearer ${state.google.accessToken}` },
+    });
+    if (!res.ok) throw new Error('fetch failed: ' + res.status);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    _audioBlobCache.set(driveId, url);
+    return url;
+  } catch(err){
+    console.warn('fetchAudioBlobUrl failed:', err);
+    return driveAudioUrl(driveId); // fallback to public URL
+  }
 }
 
 
@@ -801,26 +828,26 @@ async function onSaveStory(e){
     if (!state.google.accessToken){
       toast('ยังไม่ได้เชื่อมต่อ Google — เสียงจะไม่ถูกบันทึก', 'error', 4000);
     } else {
-      // Diagnostic: check blob is valid
       const blobSize = state.pendingVoiceBlob.size || 0;
+      const blobMime = state.pendingVoiceBlob.type || '(no mime)';
+
       if (blobSize === 0){
-        toast('เสียงที่อัดได้ขนาด 0 — iOS PWA อาจ block ไมค์ ลองอัดใน Safari แทน', 'error', 7000);
+        alert(`❌ Voice blob ขนาด 0 byte\n\nสาเหตุ: iOS PWA อาจ block microphone\n\nลองอัดใน Safari ปกติแทน หรือเช็ค Settings → Safari → Microphone`);
       } else if (blobSize < 500){
-        toast(`เสียงที่อัดสั้นเกินไป (${blobSize} bytes) — ลองอัดใหม่`, 'error', 5000);
+        alert(`⚠️ Voice file สั้นเกิน (${blobSize} bytes)\n\nลองอัดใหม่`);
       } else {
         try {
-          const mime = state.pendingVoiceBlob.type || 'audio/webm';
           let ext = 'webm';
-          if (mime.includes('mp4'))  ext = 'm4a';
-          else if (mime.includes('ogg')) ext = 'ogg';
-          else if (mime.includes('wav')) ext = 'wav';
-          const audioFile = new File([state.pendingVoiceBlob], `${id}_voice.${ext}`, {type: mime});
+          if (blobMime.includes('mp4'))  ext = 'm4a';
+          else if (blobMime.includes('ogg')) ext = 'ogg';
+          else if (blobMime.includes('wav')) ext = 'wav';
+          const audioFile = new File([state.pendingVoiceBlob], `${id}_voice.${ext}`, {type: blobMime});
           const result = await uploadToDrive(audioFile);
           voiceDriveId = result.id;
         } catch(err){
-          console.error('voice upload', err);
-          const detail = (err && err.message) ? err.message.slice(0, 100) : 'unknown';
-          toast(`อัปเสียงไม่สำเร็จ: ${detail}`, 'error', 8000);
+          const detail = (err && err.message) ? err.message : String(err);
+          // Use alert() so iOS PWA users can see the full error (no console available)
+          alert(`❌ อัปเสียงไม่สำเร็จ\n\nขนาดไฟล์: ${(blobSize/1024).toFixed(1)} KB\nMime: ${blobMime}\n\nError:\n${detail}\n\nกด OK เพื่อปิด — story จะถูกบันทึกแบบไม่มีเสียง`);
         }
       }
     }
@@ -1151,7 +1178,10 @@ function openStory(id){
     : '';
 
   const voiceHTML = s.voice_drive_id
-    ? `<div class="mc-voice"><label class="muted small">🎤 ฟังเสียง</label><audio controls src="${driveAudioUrl(s.voice_drive_id)}"></audio></div>`
+    ? `<div class="mc-voice">
+         <label class="muted small">🎤 ฟังเสียง <span id="voiceLoadStatus" class="muted small" style="margin-left:8px"></span></label>
+         <audio id="modalVoiceAudio" controls preload="none" style="width:100%"></audio>
+       </div>`
     : '';
 
   $('#modalContent').innerHTML = `
@@ -1180,6 +1210,22 @@ function openStory(id){
   $('#storyEdit').addEventListener('click', ()=>editStory(id));
   $('#storyDelete').addEventListener('click', ()=>deleteStory(id));
   $('#storyModal').classList.remove('hidden');
+
+  // Async load voice file as blob URL (works on iOS PWA)
+  if (s.voice_drive_id){
+    const audioEl = $('#modalVoiceAudio');
+    const statusEl = $('#voiceLoadStatus');
+    if (statusEl) statusEl.textContent = '(กำลังโหลด...)';
+    fetchAudioBlobUrl(s.voice_drive_id).then(url => {
+      if (audioEl){
+        audioEl.src = url;
+        if (statusEl) statusEl.textContent = '';
+      }
+    }).catch(err => {
+      console.error('voice load error', err);
+      if (statusEl) statusEl.textContent = '(โหลดเสียงไม่สำเร็จ)';
+    });
+  }
 }
 
 function closeModal(){ $('#storyModal').classList.add('hidden'); }
@@ -1210,10 +1256,11 @@ function editStory(id){
   resetVoiceUI();
   if (s.voice_drive_id){
     const audio = $('#voicePlayback');
-    audio.src = driveAudioUrl(s.voice_drive_id);
     audio.classList.remove('hidden');
     $('#voiceDelete').classList.remove('hidden');
     $('#recordBtn').querySelector('.voice-label').textContent = 'อัดใหม่';
+    // Async load via blob (works on iOS PWA)
+    fetchAudioBlobUrl(s.voice_drive_id).then(url => { audio.src = url; }).catch(err => console.warn(err));
   }
 
   renderPhotoPreview();
