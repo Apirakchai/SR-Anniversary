@@ -357,23 +357,30 @@ a{color:inherit}
 .bottom-nav{
   position:fixed;bottom:0;left:0;right:0;z-index:60;
   display:flex;justify-content:space-around;align-items:stretch;
-  background:var(--bg-app);
+  background:rgba(255,253,247,.92);
   border-top:1px solid var(--border-soft);
   padding:6px 4px calc(8px + var(--safe-bottom, 0px));
-  backdrop-filter:blur(12px);
-  -webkit-backdrop-filter:blur(12px);
+  backdrop-filter:saturate(180%) blur(20px);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);
+  box-shadow:0 -2px 14px -4px rgba(10,31,68,.08);
 }
-[data-theme="midnight"] .bottom-nav{background:rgba(8,16,36,.95)}
-[data-theme="sunset"] .bottom-nav{background:rgba(28,18,32,.95)}
+[data-theme="midnight"] .bottom-nav{background:rgba(13,18,38,.92);box-shadow:0 -2px 14px -4px rgba(0,0,0,.4)}
+[data-theme="sunset"] .bottom-nav{background:rgba(28,18,32,.92);box-shadow:0 -2px 14px -4px rgba(0,0,0,.3)}
 
 .bnav-btn{
   flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;
   padding:6px 4px;background:transparent;border:none;cursor:pointer;
-  color:var(--text-soft);transition:all .2s;position:relative;
+  color:var(--text-soft);transition:color .2s, transform .2s;position:relative;
   border-radius:8px;min-height:52px;
+  -webkit-tap-highlight-color:transparent;
+  -webkit-user-select:none;user-select:none;
+  outline:none;
+  font-family:inherit;
 }
-.bnav-btn:hover{background:rgba(0,0,0,.04)}
-[data-theme="midnight"] .bnav-btn:hover{background:rgba(255,255,255,.04)}
+.bnav-btn:hover{color:var(--text-main)}
+.bnav-btn:focus{outline:none;background:transparent}
+.bnav-btn:focus-visible{outline:2px solid var(--gold);outline-offset:-4px}
+.bnav-btn:active{transform:scale(.92)}
 .bnav-btn.active{color:var(--gold)}
 .bnav-btn.active .bnav-ico{transform:scale(1.1)}
 
@@ -1145,13 +1152,17 @@ a{color:inherit}
    MEMORY ROULETTE FAB
 ═══════════════════════════════════════════════════════ */
 .fab-roulette{
-  position:fixed;bottom:calc(var(--safe-bot) + 24px);right:24px;z-index:80;
-  width:60px;height:60px;border-radius:50%;
+  position:fixed;
+  bottom:calc(82px + var(--safe-bottom, 0px));
+  left:20px;
+  z-index:55;
+  width:48px;height:48px;border-radius:50%;
   background:linear-gradient(140deg,var(--gold),var(--gold-soft));
-  color:var(--navy-deep);font-size:26px;
-  box-shadow:0 10px 30px -8px rgba(201,169,97,.6),0 0 0 2px rgba(255,255,255,.3) inset;
+  color:var(--navy-deep);font-size:22px;
+  box-shadow:0 6px 18px -6px rgba(201,169,97,.55),0 0 0 2px rgba(255,255,255,.3) inset;
   transition:all .25s;cursor:pointer;
   display:flex;align-items:center;justify-content:center;
+  border:none;
 }
 .fab-roulette:hover{transform:scale(1.1) rotate(-15deg)}
 .fab-roulette:active{transform:scale(.95)}
@@ -1159,6 +1170,14 @@ a{color:inherit}
 @keyframes rouletteSpin{
   0%{transform:rotate(0)}
   100%{transform:rotate(720deg)}
+}
+
+/* Desktop: keep roulette top-left of bottom nav area */
+@media (min-width: 768px){
+  .fab-roulette{
+    left:calc(50% - 360px);
+    bottom:90px;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════
