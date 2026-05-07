@@ -477,9 +477,14 @@ function switchTab(name, skipGroupSync){
     }
   }
 
-  // ซ่อน FAB ตอนอยู่หน้า add หรือ settings
+  // ซ่อน FAB+ และ Roulette ตามหน้า
+  // แสดงเฉพาะหน้า Stories (timeline, year, map) เพื่อไม่ทับ form/content อื่น
+  const STORIES_TABS = ['timeline','year','map'];
+  const showFloatingActions = STORIES_TABS.includes(name);
   const fab = document.getElementById('fabAdd');
-  if (fab) fab.classList.toggle('hidden', name==='add' || name==='settings');
+  if (fab) fab.classList.toggle('hidden', !showFloatingActions);
+  const roulette = document.getElementById('rouletteBtn');
+  if (roulette) roulette.classList.toggle('hidden', name !== 'timeline'); // roulette เฉพาะ timeline
 
   // Render hooks (เดิม)
   if (name === 'add' && !state.editingId) resetForm();

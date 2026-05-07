@@ -1172,6 +1172,7 @@ a{color:inherit}
 }
 .fab-roulette:hover{transform:scale(1.1) rotate(-15deg)}
 .fab-roulette:active{transform:scale(.95)}
+.fab-roulette.hidden{display:none}
 .fab-roulette.spinning{animation:rouletteSpin 1s ease-out}
 @keyframes rouletteSpin{
   0%{transform:rotate(0)}
