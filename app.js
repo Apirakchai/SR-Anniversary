@@ -595,6 +595,19 @@ function getPhotoSrc(photo){
   return '';
 }
 
+// Hydrate img elements with blob URLs (async, after render)
+function hydrateImages(rootEl = document){
+  const imgs = rootEl.querySelectorAll('img[data-drive-id]');
+  imgs.forEach(img => {
+    const driveId = img.dataset.driveId;
+    if (!driveId || img.dataset.hydrated === '1') return;
+    img.dataset.hydrated = '1';
+    fetchImageBlobUrl(driveId).then(url => {
+      if (url) img.src = url;
+    }).catch(()=>{ /* keep placeholder src */ });
+  });
+}
+
 function upgradeThumbnailRes(url, size = 1600){
   // Drive thumbnailLink comes back as ".../=s220" by default — upgrade for retina
   if (!url) return url;
@@ -614,14 +627,43 @@ function driveAudioUrl(driveId){
 
 // Cache of blob URLs we created so we don't refetch the same file twice in one session
 const _audioBlobCache = new Map();
+const _imageBlobCache = new Map();
 
 async function fetchAudioBlobUrl(driveId){
   if (!driveId) return '';
-  // Return cached URL if available
   if (_audioBlobCache.has(driveId)){
     return _audioBlobCache.get(driveId);
   }
-  if (!state.google.accessToken) return driveAudioUrl(driveId); // fallback
+  if (!state.google.accessToken) return driveAudioUrl(driveId);
+
+  try {
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${driveId}?alt=media`, {
+      headers: { Authorization: `Bearer ${state.google.accessToken}` },
+    });
+    if (!res.ok) throw new Error('fetch failed: ' + res.status);
+    const rawBlob = await res.blob();
+    // Force a known audio MIME type — iOS chokes on application/octet-stream
+    let mime = rawBlob.type;
+    if (!mime || mime === 'application/octet-stream' || !mime.startsWith('audio/')){
+      // Pick best guess based on what iOS Safari + Chrome can both play
+      mime = 'audio/mp4';
+    }
+    const blob = new Blob([rawBlob], { type: mime });
+    const url = URL.createObjectURL(blob);
+    _audioBlobCache.set(driveId, url);
+    return url;
+  } catch(err){
+    console.warn('fetchAudioBlobUrl failed:', err);
+    return driveAudioUrl(driveId);
+  }
+}
+
+async function fetchImageBlobUrl(driveId){
+  if (!driveId) return '';
+  if (_imageBlobCache.has(driveId)){
+    return _imageBlobCache.get(driveId);
+  }
+  if (!state.google.accessToken) return '';
 
   try {
     const res = await fetch(`https://www.googleapis.com/drive/v3/files/${driveId}?alt=media`, {
@@ -630,11 +672,11 @@ async function fetchAudioBlobUrl(driveId){
     if (!res.ok) throw new Error('fetch failed: ' + res.status);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
-    _audioBlobCache.set(driveId, url);
+    _imageBlobCache.set(driveId, url);
     return url;
   } catch(err){
-    console.warn('fetchAudioBlobUrl failed:', err);
-    return driveAudioUrl(driveId); // fallback to public URL
+    console.warn('fetchImageBlobUrl failed:', err);
+    return '';
   }
 }
 
@@ -1053,7 +1095,9 @@ function renderAll(){
   list.innerHTML = stories.map((s, idx)=>{
     const num = stories.length - idx;
     const photos = getStoryPhotos(s.id);
-    const cover = photos[0] ? getPhotoSrc(photos[0]) : null;
+    const coverPhoto = photos[0] || null;
+    const cover = coverPhoto ? getPhotoSrc(coverPhoto) : null;
+    const driveAttr = (coverPhoto && coverPhoto.drive_id) ? ` data-drive-id="${coverPhoto.drive_id}"` : '';
     const moodEmoji = s.mood ? MOOD_EMOJI[s.mood] || '' : '';
     const dateLabel = s.day
       ? `${s.day} ${monthsTH[s.month]} · ${s.year}`
@@ -1061,7 +1105,7 @@ function renderAll(){
     return `
       <article class="story-card" data-id="${s.id}">
         <div class="story-cover ${cover ? '' : 'placeholder'}">
-          ${cover ? `<img src="${cover}" alt="" loading="lazy"/>` : ''}
+          ${cover ? `<img src="${cover}" alt="" loading="lazy"${driveAttr}/>` : ''}
           <div class="story-month-tag">${dateLabel}</div>
           ${moodEmoji ? `<div class="story-mood-emoji">${moodEmoji}</div>` : ''}
         </div>
@@ -1083,6 +1127,9 @@ function renderAll(){
   $$('.story-card').forEach(c=>{
     c.addEventListener('click', ()=>openStory(c.dataset.id));
   });
+
+  // Hydrate images via Drive API blob URLs (handles iOS PWA + desktop without Drive cookies)
+  hydrateImages(list);
 }
 
 
@@ -1167,13 +1214,16 @@ function openStory(id){
   const monthsFull = ['','January','February','March','April','May','June',
                       'July','August','September','October','November','December'];
   const photos = getStoryPhotos(id);
-  const cover = photos[0] ? getPhotoSrc(photos[0]) : null;
+  const coverPhoto = photos[0] || null;
+  const cover = coverPhoto ? getPhotoSrc(coverPhoto) : null;
+  const coverDriveAttr = (coverPhoto && coverPhoto.drive_id) ? ` data-drive-id="${coverPhoto.drive_id}"` : '';
   const moodEmoji = s.mood ? MOOD_EMOJI[s.mood] || '' : '';
 
   const galleryHTML = photos.length > 1
     ? `<div class="mc-gallery">${photos.slice(1).map(p=>{
         const src = getPhotoSrc(p);
-        return `<img src="${src}" alt="" loading="lazy"/>`;
+        const dAttr = p.drive_id ? ` data-drive-id="${p.drive_id}"` : '';
+        return `<img src="${src}" alt="" loading="lazy"${dAttr}/>`;
       }).join('')}</div>`
     : '';
 
@@ -1186,7 +1236,7 @@ function openStory(id){
 
   $('#modalContent').innerHTML = `
     <div class="mc-cover ${cover?'':'placeholder'}">
-      ${cover ? `<img src="${cover}" alt=""/>` : ''}
+      ${cover ? `<img src="${cover}" alt=""${coverDriveAttr}/>` : ''}
       ${moodEmoji ? `<div class="mc-mood-emoji">${moodEmoji}</div>` : ''}
     </div>
     <div class="mc-body">
@@ -1210,6 +1260,9 @@ function openStory(id){
   $('#storyEdit').addEventListener('click', ()=>editStory(id));
   $('#storyDelete').addEventListener('click', ()=>deleteStory(id));
   $('#storyModal').classList.remove('hidden');
+
+  // Hydrate cover + gallery images
+  hydrateImages($('#modalContent'));
 
   // Async load voice file as blob URL (works on iOS PWA)
   if (s.voice_drive_id){
