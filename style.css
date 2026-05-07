@@ -820,8 +820,10 @@ a{color:inherit}
    TOAST
 ═══════════════════════════════════════════════════════ */
 .toast{
-  position:fixed;bottom:calc(var(--safe-bot) + 24px);left:50%;
-  transform:translateX(-50%) translateY(120%);
+  position:fixed;
+  bottom:calc(82px + var(--safe-bottom, 0px));
+  left:50%;
+  transform:translateX(-50%) translateY(180%);
   padding:14px 22px;border-radius:14px;
   background:var(--text-main);color:var(--bg-app);font-size:14px;letter-spacing:.02em;
   box-shadow:var(--shadow-lg);z-index:400;transition:transform .35s cubic-bezier(.2,.9,.3,1.2);
@@ -838,7 +840,7 @@ a{color:inherit}
 @media (min-width: 768px){
   .topbar{padding-left:32px;padding-right:32px}
   .hero{padding:90px 24px 96px}
-  .tab-panel{padding:36px 32px 80px}
+  .tab-panel{padding:36px 32px 130px}
   .timeline{grid-template-columns:repeat(auto-fill, minmax(300px, 1fr));gap:26px}
 }
 
