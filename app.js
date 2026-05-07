@@ -115,8 +115,19 @@ function toast(msg, type='', ms=2800){
   const t = $('#toast');
   t.textContent = msg;
   t.className = 'toast ' + type + ' show';
+  t.dataset.type = type; // remember last type for auto-dismiss
   clearTimeout(toast._t);
   toast._t = setTimeout(()=>t.classList.remove('show'), ms);
+}
+
+function dismissErrorToast(){
+  // Auto-dismiss any persistent error toast (called when sync recovers)
+  const t = $('#toast');
+  if (t && t.dataset.type === 'error'){
+    clearTimeout(toast._t);
+    t.classList.remove('show');
+    t.dataset.type = '';
+  }
 }
 
 function loadLS(key, fallback){
@@ -835,7 +846,10 @@ async function onSaveStory(e){
 
   let syncOk = true;
   if (state.google.accessToken){
-    try { await syncToSheet(); }
+    try {
+      await syncToSheet();
+      dismissErrorToast();
+    }
     catch(err){
       console.error(err);
       syncOk = false;
@@ -1885,18 +1899,18 @@ async function autoSyncTick(){
     await pullFromSheet();
     await syncToSheet();
     setSyncIndicator('connected', 'connected');
+    dismissErrorToast(); // clear stale error toasts on successful recovery
   } catch(err){
     console.warn('auto-sync error', err);
-    // Check if it's a 401 auth error → try silent refresh once
     const status = err?.status || err?.result?.error?.code;
     if (status === 401 || status === 403){
       console.log('Auth error during sync, attempting silent refresh...');
       try {
         await silentRefreshToken();
-        // Retry sync after successful refresh
         await pullFromSheet();
         await syncToSheet();
         setSyncIndicator('connected', 'connected');
+        dismissErrorToast();
       } catch(refreshErr){
         console.warn('Silent refresh also failed', refreshErr);
         setSyncIndicator('error', 'sync failed');
@@ -1916,6 +1930,7 @@ async function manualSync(){
     await pullFromSheet();
     await syncToSheet();
     setSyncIndicator('connected', 'connected');
+    dismissErrorToast();
     toast('Sync เรียบร้อย ✓', 'success');
   } catch(err){
     console.error(err);
