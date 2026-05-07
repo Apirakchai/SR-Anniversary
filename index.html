@@ -19,6 +19,10 @@
 
 <link rel="stylesheet" href="style.css" />
 
+<!-- Leaflet for Memory Map -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://apis.google.com/js/api.js" async defer></script>
 </head>
@@ -123,6 +127,13 @@
     <button class="tab active" data-tab="timeline">📖 Timeline</button>
     <button class="tab" data-tab="year">📅 Year</button>
     <button class="tab" data-tab="add">＋ เพิ่ม</button>
+    <button class="tab" data-tab="map">🗺️ Map</button>
+    <button class="tab" data-tab="stats">📊 Stats</button>
+    <button class="tab" data-tab="notes">💬 Notes</button>
+    <button class="tab" data-tab="qotd">❓ Q&amp;A</button>
+    <button class="tab" data-tab="daily">📝 Daily</button>
+    <button class="tab" data-tab="bucket">🎯 Bucket</button>
+    <button class="tab" data-tab="ideas">🎲 Ideas</button>
     <button class="tab" data-tab="capsule">💌 Capsule</button>
     <button class="tab" data-tab="settings">⚙</button>
   </nav>
@@ -187,12 +198,17 @@
         </div>
       </div>
     </div>
+    <div id="highlightsSection" class="highlights-section hidden">
+      <h4 class="highlights-title">⭐ Highlights</h4>
+      <div id="highlightsRow" class="highlights-row"></div>
+    </div>
     <div id="timeline" class="timeline"></div>
     <div id="emptyState" class="empty-state hidden">
       <div class="empty-art">♡</div>
       <p>ยังไม่มีเรื่องราวเลยนะ<br/>มาเริ่มเก็บความทรงจำเดือนแรกกันเถอะ</p>
       <button class="btn-primary" data-go="add">เพิ่มเรื่องราวแรก</button>
     </div>
+    <button id="rouletteBtn" class="fab-roulette" title="สุ่มเปิดความทรงจำ">🎰</button>
   </section>
 
   <!-- TAB: YEAR VIEW -->
@@ -287,6 +303,183 @@
           <button type="submit" class="btn-primary">💾 บันทึก</button>
         </div>
       </form>
+    </div>
+  </section>
+
+  <!-- TAB: MAP -->
+  <section id="tab-map" class="tab-panel">
+    <div class="timeline-head">
+      <h3>🗺️ Memory Map</h3>
+      <div class="view-toggle">
+        <button class="view-btn active" data-view="map">🗺️ แผนที่</button>
+        <button class="view-btn" data-view="wall">📸 Photo Wall</button>
+      </div>
+    </div>
+    <div id="memoryMap" class="memory-map"></div>
+    <div id="photoWall" class="photo-wall hidden"></div>
+    <div id="mapEmpty" class="empty-state hidden">
+      <div class="empty-art">📍</div>
+      <p>ยังไม่มีสถานที่<br/>เพิ่มสถานที่ใน story เพื่อให้ปักหมุดบนแผนที่</p>
+    </div>
+  </section>
+
+  <!-- TAB: STATS -->
+  <section id="tab-stats" class="tab-panel">
+    <div class="timeline-head">
+      <h3>📊 Our Stats</h3>
+      <p class="muted">ภาพรวมความรักของเรา</p>
+    </div>
+    <div id="statsContent" class="stats-content"></div>
+  </section>
+
+  <!-- TAB: BUCKET LIST -->
+  <section id="tab-bucket" class="tab-panel">
+    <div class="form-card">
+      <h3>🎯 Couple Bucket List</h3>
+      <p class="muted">สิ่งที่อยากทำด้วยกันในอนาคต</p>
+
+      <form id="bucketForm" autocomplete="off">
+        <div class="field">
+          <label>เพิ่มสิ่งที่อยากทำ</label>
+          <div class="row">
+            <input type="text" id="bucketTitle" maxlength="120" placeholder="เช่น ไปดูฟ้าตอนกลางคืน"/>
+            <select id="bucketCategory">
+              <option value="travel">✈️ เที่ยว</option>
+              <option value="food">🍜 กิน</option>
+              <option value="experience">✨ ประสบการณ์</option>
+              <option value="goal">🏆 เป้าหมาย</option>
+              <option value="other">💭 อื่น ๆ</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn-primary small">➕ เพิ่ม</button>
+        </div>
+      </form>
+
+      <hr/>
+
+      <div class="bucket-tabs">
+        <button class="bucket-filter active" data-filter="all">ทั้งหมด</button>
+        <button class="bucket-filter" data-filter="pending">⏳ ยังไม่ทำ</button>
+        <button class="bucket-filter" data-filter="done">✓ ทำแล้ว</button>
+      </div>
+
+      <div id="bucketList" class="bucket-list"></div>
+    </div>
+  </section>
+
+  <!-- TAB: DAILY ONE-LINE -->
+  <section id="tab-daily" class="tab-panel">
+    <div class="form-card">
+      <h3>📝 Daily Line</h3>
+      <p class="muted">เขียนหนึ่งบรรทัดทุกวัน — สะสมไว้เป็น story เดือนนี้</p>
+
+      <form id="dailyForm" autocomplete="off">
+        <div class="field">
+          <label>วันนี้คุณรู้สึกยังไง?</label>
+          <input type="text" id="dailyText" maxlength="200" placeholder="วันนี้ได้กินข้าวกับเค้า อิ่มและอุ่นใจ..."/>
+          <p class="muted small" id="dailyDate" style="margin-top:6px"></p>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn-primary">💾 บันทึก</button>
+        </div>
+      </form>
+
+      <hr/>
+
+      <h3>📚 Daily Lines เดือนนี้</h3>
+      <div id="dailyList" class="daily-list"></div>
+
+      <hr/>
+
+      <details>
+        <summary class="muted small" style="cursor:pointer">เดือนเก่า ๆ</summary>
+        <div id="dailyArchive" class="daily-archive" style="margin-top:12px"></div>
+      </details>
+    </div>
+  </section>
+
+  <!-- TAB: QUESTION OF THE DAY -->
+  <section id="tab-qotd" class="tab-panel">
+    <div class="form-card">
+      <h3>❓ Question of the Day</h3>
+      <p class="muted">คำถามวันนี้ — ตอบทั้งคู่แล้วเปรียบเทียบ</p>
+
+      <div id="qotdToday" class="qotd-card"></div>
+
+      <hr/>
+
+      <h3>🗂 คำถามที่ผ่านมา</h3>
+      <div id="qotdHistory" class="qotd-history"></div>
+    </div>
+  </section>
+
+  <!-- TAB: LOVE NOTES -->
+  <section id="tab-notes" class="tab-panel">
+    <div class="form-card">
+      <h3>💬 Love Notes</h3>
+      <p class="muted">ส่งข้อความสั้น ๆ ให้กัน — อีกฝ่ายเปิดอ่านครั้งหน้า</p>
+
+      <form id="noteForm" autocomplete="off">
+        <div class="field">
+          <label>ส่งถึง <span id="noteRecipient" style="color:var(--gold)"></span></label>
+          <textarea id="noteText" rows="3" maxlength="500" placeholder="เขียนข้อความถึงเค้า..."></textarea>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn-primary">💌 ส่ง</button>
+        </div>
+      </form>
+
+      <hr/>
+
+      <div class="notes-tabs">
+        <button class="notes-filter active" data-view="inbox">📥 Inbox <span id="inboxBadge" class="notes-badge hidden">0</span></button>
+        <button class="notes-filter" data-view="sent">📤 ส่งไป</button>
+      </div>
+
+      <div id="notesList" class="notes-list"></div>
+    </div>
+  </section>
+
+  <!-- TAB: DATE IDEAS -->
+  <section id="tab-ideas" class="tab-panel">
+    <div class="form-card">
+      <h3>🎲 Date Idea Generator</h3>
+      <p class="muted">สุ่มไอเดียเดทจาก list ที่เพิ่มไว้</p>
+
+      <div id="ideaSpinner" class="idea-spinner">
+        <div class="idea-card">
+          <div class="idea-emoji" id="ideaEmoji">🎲</div>
+          <div class="idea-text" id="ideaText">กดสุ่มเพื่อหาไอเดียเดทวันนี้</div>
+          <div class="idea-meta" id="ideaMeta"></div>
+        </div>
+        <button id="rollIdeaBtn" class="btn-primary roll-btn">🎰 สุ่ม!</button>
+      </div>
+
+      <hr/>
+
+      <h4 style="font-family:var(--display);font-size:20px;font-weight:400;margin:0 0 12px">เพิ่มไอเดียใหม่</h4>
+      <form id="ideaForm" autocomplete="off">
+        <div class="field">
+          <div class="row">
+            <input type="text" id="ideaInput" maxlength="120" placeholder="เช่น ทำอาหารเย็นด้วยกัน"/>
+            <select id="ideaCat">
+              <option value="🍽️">🍽️ กิน</option>
+              <option value="✈️">✈️ เที่ยว</option>
+              <option value="🎬">🎬 ดูหนัง</option>
+              <option value="🏠">🏠 อยู่บ้าน</option>
+              <option value="💐">💐 โรแมนติก</option>
+              <option value="🎨">🎨 กิจกรรม</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn-primary small">➕ เพิ่ม</button>
+        </div>
+      </form>
+
+      <div id="ideaList" class="idea-list"></div>
     </div>
   </section>
 
@@ -397,6 +590,29 @@
 
       <hr/>
 
+      <h3>🔔 การแจ้งเตือน</h3>
+      <p class="muted small">เตือนทุกวันที่ 8 (monthiversary) — ใช้ได้เฉพาะใน Safari/Chrome</p>
+      <div class="setting-actions">
+        <button id="enableNotifBtn" class="btn-ghost">🔔 เปิดการแจ้งเตือน</button>
+        <span id="notifStatus" class="muted small" style="align-self:center"></span>
+      </div>
+
+      <hr/>
+
+      <h3>🎬 Year Recap</h3>
+      <p class="muted small">สร้าง slideshow รวมรูปทั้งปี + เพลงประกอบ</p>
+
+      <div class="field">
+        <label>เลือกปี</label>
+        <select id="recapYear"></select>
+      </div>
+
+      <div class="setting-actions">
+        <button id="playRecapBtn" class="btn-primary">▶ เล่น Recap</button>
+      </div>
+
+      <hr/>
+
       <h3>🎨 ธีม</h3>
       <div class="theme-picker">
         <button class="theme-btn active" data-theme="navy">
@@ -460,6 +676,22 @@
     <p class="anniv-msg" id="annivMsg">— a love letter for you —</p>
     <div class="anniv-meta"><span id="annivDate"></span></div>
     <button id="annivClose" class="anniv-btn">เปิดอ่าน ♥</button>
+  </div>
+</div>
+
+<!-- ░░░░░░░░░░░░░░░░  YEAR RECAP MODAL  ░░░░░░░░░░░░░░░░ -->
+<div id="recapModal" class="recap hidden">
+  <button id="recapClose" class="recap-close">✕</button>
+  <div class="recap-stage">
+    <div class="recap-slide active" id="recapSlide">
+      <img id="recapImg" src="" alt=""/>
+      <div class="recap-info">
+        <div class="recap-eyebrow" id="recapEyebrow">—</div>
+        <h2 class="recap-title" id="recapTitle">—</h2>
+        <p class="recap-text" id="recapText">—</p>
+      </div>
+    </div>
+    <div class="recap-progress" id="recapProgress"></div>
   </div>
 </div>
 

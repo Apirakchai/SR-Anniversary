@@ -22,6 +22,12 @@ const CONFIG = {
   TAB_PHOTOS:  'Photos',
   TAB_BACKUPS: 'Backups',
   TAB_CAPSULES:'Capsules',
+  TAB_BUCKETS: 'BucketList',
+  TAB_DAILY:   'DailyLines',
+  TAB_QOTD:    'QOTD',
+  TAB_NOTES:   'Notes',
+  TAB_IDEAS:   'DateIdeas',
+  TAB_PREFS:   'SharedPrefs',
 
   AUTO_SYNC_MS: 30 * 1000,
   TYPING_PAUSE_MS: 5 * 1000,
@@ -39,6 +45,13 @@ const LS = {
   STORIES        : 'sr_stories',
   PHOTOS         : 'sr_photos',
   CAPSULES       : 'sr_capsules',
+  BUCKETS        : 'sr_buckets',
+  DAILY          : 'sr_daily',
+  QOTD           : 'sr_qotd',
+  NOTES          : 'sr_notes',
+  IDEAS          : 'sr_ideas',
+  HIGHLIGHTS     : 'sr_highlights',
+  NOTIF_LAST     : 'sr_notif_last',
   USER           : 'sr_user',
   CLIENT_ID      : 'sr_client_id',
   API_KEY        : 'sr_api_key',
@@ -74,6 +87,15 @@ let state = {
   stories: [],
   photos: [],
   capsules: [],
+  buckets: [],
+  daily: [],
+  qotdAnswers: [],
+  notes: [],
+  ideas: [],
+  highlights: [],
+  notesView: 'inbox',
+  mapView: 'map',
+  bucketFilter: 'all',
   pendingPhotos: [],
   pendingVoiceBlob: null,
   pendingVoiceDriveId: null,
@@ -87,6 +109,7 @@ let state = {
   selectedCapsuleMonths: null,
   recordingState: { mediaRecorder: null, chunks: [], startTime: 0, timer: null },
   filters: { year:'', month:'', day:'', mood:'', search:'' },
+  recap: { interval: null, slides: [], idx: 0, audio: null },
   google: {
     tokenClient: null,
     accessToken: null,
@@ -134,7 +157,10 @@ function loadLS(key, fallback){
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; }
   catch { return fallback; }
 }
-function saveLS(key, val){ localStorage.setItem(key, JSON.stringify(val)); }
+function saveLS(key, val){
+  localStorage.setItem(key, JSON.stringify(val));
+  if (key === LS.PHOTOS) _invalidatePhotoCache();
+}
 
 function escapeHtml(str=''){
   return String(str).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -232,6 +258,12 @@ function initApp(){
   state.stories  = loadLS(LS.STORIES, []);
   state.photos   = loadLS(LS.PHOTOS, []);
   state.capsules = loadLS(LS.CAPSULES, []);
+  state.buckets  = loadLS(LS.BUCKETS, []);
+  state.daily    = loadLS(LS.DAILY, []);
+  state.qotdAnswers = loadLS(LS.QOTD, []);
+  state.notes = loadLS(LS.NOTES, []);
+  state.ideas = loadLS(LS.IDEAS, []);
+  state.highlights = loadLS(LS.HIGHLIGHTS, []);
   state.google.sheetId = localStorage.getItem(LS.SHEET_ID) || null;
 
   initTabs();
@@ -248,6 +280,14 @@ function initApp(){
   initPrint();
   initMoodPicker();
   initVoiceRecorder();
+  initBucket();
+  initDaily();
+  initRecap();
+  initNotes();
+  initIdeas();
+  initRoulette();
+  initPhotoWall();
+  initNotifications();
 
   renderAll();
   renderYearView();
@@ -372,6 +412,13 @@ function switchTab(name){
   if (name === 'add' && !state.editingId) resetForm();
   if (name === 'year') renderYearView();
   if (name === 'capsule') renderCapsules();
+  if (name === 'map') renderMemoryMap();
+  if (name === 'stats') renderStats();
+  if (name === 'bucket') renderBucketList();
+  if (name === 'daily') renderDaily();
+  if (name === 'qotd') renderQOTD();
+  if (name === 'notes') renderNotes();
+  if (name === 'ideas') renderIdeas();
   window.scrollTo({top:0, behavior:'smooth'});
 }
 
@@ -1086,7 +1133,19 @@ function applyFiltersAndRender(){
 // ───────────────────────────────────────────────
 // RENDER TIMELINE
 // ───────────────────────────────────────────────
-function getStoryPhotos(storyId){ return state.photos.filter(p=>p.story_id === storyId); }
+let _photoCache = null;
+function _invalidatePhotoCache(){ _photoCache = null; }
+function getStoryPhotos(storyId){
+  if (!_photoCache){
+    _photoCache = new Map();
+    for (const p of state.photos){
+      if (!p.story_id) continue;
+      if (!_photoCache.has(p.story_id)) _photoCache.set(p.story_id, []);
+      _photoCache.get(p.story_id).push(p);
+    }
+  }
+  return _photoCache.get(storyId) || [];
+}
 
 function renderAll(){
   const list = $('#timeline');
@@ -1125,7 +1184,7 @@ function renderAll(){
       ? `${s.day} ${monthsTH[s.month]} · ${s.year}`
       : `${monthsTH[s.month]} · ${s.year}`;
     return `
-      <article class="story-card" data-id="${s.id}">
+      <article class="story-card ${isHighlight(s.id) ? 'is-highlight' : ''}" data-id="${s.id}">
         <div class="story-cover ${cover ? '' : 'placeholder'}">
           ${cover ? `<img src="${cover}" alt="" loading="lazy"${driveAttr}/>` : ''}
           <div class="story-month-tag">${dateLabel}</div>
@@ -1152,6 +1211,7 @@ function renderAll(){
 
   // Hydrate images via Drive API blob URLs (handles iOS PWA + desktop without Drive cookies)
   hydrateImages(list);
+  renderHighlights();
 }
 
 
@@ -1274,6 +1334,7 @@ function openStory(id){
       ${galleryHTML}
       <div class="mc-actions">
         <button class="btn-ghost danger" id="storyDelete">🗑 ลบ</button>
+        <button class="btn-highlight ${isHighlight(id) ? 'active' : ''}" id="storyHighlight">${isHighlight(id) ? '⭐ ยกเลิก pin' : '⭐ Pin Highlight'}</button>
         <button class="btn-primary" id="storyEdit">✎ แก้ไข</button>
       </div>
     </div>
@@ -1281,6 +1342,10 @@ function openStory(id){
 
   $('#storyEdit').addEventListener('click', ()=>editStory(id));
   $('#storyDelete').addEventListener('click', ()=>deleteStory(id));
+  $('#storyHighlight').addEventListener('click', ()=>{
+    toggleHighlight(id);
+    closeModal();
+  });
   $('#storyModal').classList.remove('hidden');
 
   // Hydrate cover + gallery images
@@ -1757,6 +1822,12 @@ async function ensureSheetExists(){
         { properties: { title: CONFIG.TAB_PHOTOS } },
         { properties: { title: CONFIG.TAB_BACKUPS } },
         { properties: { title: CONFIG.TAB_CAPSULES } },
+        { properties: { title: CONFIG.TAB_BUCKETS } },
+        { properties: { title: CONFIG.TAB_DAILY } },
+        { properties: { title: CONFIG.TAB_QOTD } },
+        { properties: { title: CONFIG.TAB_NOTES } },
+        { properties: { title: CONFIG.TAB_IDEAS } },
+        { properties: { title: CONFIG.TAB_PREFS } },
       ],
     }
   });
@@ -1768,7 +1839,9 @@ async function ensureSheetExists(){
 }
 
 async function ensureRequiredTabs(existingTabs){
-  const required = [CONFIG.TAB_STORIES, CONFIG.TAB_PHOTOS, CONFIG.TAB_BACKUPS, CONFIG.TAB_CAPSULES];
+  const required = [CONFIG.TAB_STORIES, CONFIG.TAB_PHOTOS, CONFIG.TAB_BACKUPS, CONFIG.TAB_CAPSULES,
+                    CONFIG.TAB_BUCKETS, CONFIG.TAB_DAILY, CONFIG.TAB_QOTD,
+                    CONFIG.TAB_NOTES, CONFIG.TAB_IDEAS, CONFIG.TAB_PREFS];
   const missing = required.filter(t => !existingTabs.includes(t));
 
   const renames = [];
@@ -1854,6 +1927,12 @@ async function writeHeaders(){
     {range: `${CONFIG.TAB_PHOTOS}!A1:F1`,  values: [['id','story_id','drive_id','name','dataURL_fallback','thumbnail_url']]},
     {range: `${CONFIG.TAB_BACKUPS}!A1:D1`, values: [['date','timestamp','story_count','snapshot_json']]},
     {range: `${CONFIG.TAB_CAPSULES}!A1:F1`,values: [['id','title','text','author','createdAt','openAt']]},
+    {range: `${CONFIG.TAB_BUCKETS}!A1:G1`, values: [['id','title','category','done','createdBy','createdAt','doneAt']]},
+    {range: `${CONFIG.TAB_DAILY}!A1:H1`,   values: [['id','date','year','month','day','text','author','createdAt']]},
+    {range: `${CONFIG.TAB_QOTD}!A1:G1`,    values: [['id','qid','qtext','date','text','author','createdAt']]},
+    {range: `${CONFIG.TAB_NOTES}!A1:F1`,   values: [['id','from','to','text','createdAt','readAt']]},
+    {range: `${CONFIG.TAB_IDEAS}!A1:E1`,   values: [['id','text','emoji','addedBy','createdAt']]},
+    {range: `${CONFIG.TAB_PREFS}!A1:B1`,   values: [['key','value']]},
   ];
   await Promise.all(updates.map(u =>
     gapi.client.sheets.spreadsheets.values.update({
@@ -1892,10 +1971,16 @@ async function pullFromSheet(){
   };
 
   try {
-    const [storyRows, photoRows, capsuleRows] = await Promise.all([
+    const [storyRows, photoRows, capsuleRows, bucketRows, dailyRows, qotdRows, noteRows, ideaRows, prefRows] = await Promise.all([
       safeGet(`${CONFIG.TAB_STORIES}!A2:K`),
       safeGet(`${CONFIG.TAB_PHOTOS}!A2:F`),
       safeGet(`${CONFIG.TAB_CAPSULES}!A2:F`),
+      safeGet(`${CONFIG.TAB_BUCKETS}!A2:G`),
+      safeGet(`${CONFIG.TAB_DAILY}!A2:H`),
+      safeGet(`${CONFIG.TAB_QOTD}!A2:G`),
+      safeGet(`${CONFIG.TAB_NOTES}!A2:F`),
+      safeGet(`${CONFIG.TAB_IDEAS}!A2:E`),
+      safeGet(`${CONFIG.TAB_PREFS}!A2:B`),
     ]);
 
     const remoteStories = storyRows.map(r=>({
@@ -1931,14 +2016,83 @@ async function pullFromSheet(){
       opened: false,
     })).filter(c=>c.id);
 
+    const remoteBuckets = bucketRows.map(r=>({
+      id: r[0],
+      title: r[1] || '',
+      category: r[2] || 'other',
+      done: r[3] === '1' || r[3] === true,
+      createdBy: r[4] || '',
+      createdAt: r[5] || '',
+      doneAt: r[6] || '',
+    })).filter(b=>b.id);
+
+    const remoteDaily = dailyRows.map(r=>({
+      id: r[0],
+      date: r[1] || '',
+      year: parseInt(r[2],10),
+      month: parseInt(r[3],10),
+      day: parseInt(r[4],10),
+      text: r[5] || '',
+      author: r[6] || '',
+      createdAt: r[7] || '',
+    })).filter(d=>d.id);
+
+    const remoteQOTD = qotdRows.map(r=>({
+      id: r[0],
+      qid: r[1] || '',
+      qtext: r[2] || '',
+      date: r[3] || '',
+      text: r[4] || '',
+      author: r[5] || '',
+      createdAt: r[6] || '',
+    })).filter(q=>q.id);
+
+    const remoteNotes = noteRows.map(r=>({
+      id: r[0],
+      from: r[1] || '',
+      to: r[2] || '',
+      text: r[3] || '',
+      createdAt: r[4] || '',
+      readAt: r[5] || '',
+    })).filter(n=>n.id);
+
+    const remoteIdeas = ideaRows.map(r=>({
+      id: r[0],
+      text: r[1] || '',
+      emoji: r[2] || '🎲',
+      addedBy: r[3] || '',
+      createdAt: r[4] || '',
+    })).filter(i=>i.id);
+
     state.stories = mergeStories(state.stories, remoteStories);
     state.stories.sort((a,b)=> (b.year - a.year) || (b.month - a.month) || ((b.day||0) - (a.day||0)));
     state.photos = mergePhotos(state.photos, remotePhotos);
     state.capsules = mergeCapsules(state.capsules, remoteCapsules);
+    state.buckets = mergeById(state.buckets, remoteBuckets);
+    state.daily = mergeById(state.daily, remoteDaily);
+    state.qotdAnswers = mergeById(state.qotdAnswers, remoteQOTD);
+    state.notes = mergeById(state.notes, remoteNotes);
+    state.ideas = mergeById(state.ideas, remoteIdeas);
+
+    // Parse shared prefs (highlights, etc.)
+    for (const r of (prefRows || [])){
+      if (r[0] === 'highlights' && r[1]){
+        try {
+          const remoteHighlights = JSON.parse(r[1]);
+          if (Array.isArray(remoteHighlights)) state.highlights = remoteHighlights;
+        } catch(e){}
+      }
+    }
 
     saveLS(LS.STORIES, state.stories);
     saveLS(LS.PHOTOS, state.photos);
     saveLS(LS.CAPSULES, state.capsules);
+    saveLS(LS.BUCKETS, state.buckets);
+    saveLS(LS.DAILY, state.daily);
+    saveLS(LS.QOTD, state.qotdAnswers);
+    saveLS(LS.NOTES, state.notes);
+    saveLS(LS.IDEAS, state.ideas);
+    saveLS(LS.HIGHLIGHTS, state.highlights);
     renderAll();
     renderYearView();
     renderCapsules();
@@ -1971,6 +2125,23 @@ function mergePhotos(local, remote){
 function mergeCapsules(local, remote){
   const map = new Map();
   [...remote, ...local].forEach(c=>{ if (!map.has(c.id)) map.set(c.id, c); });
+  return [...map.values()];
+}
+
+function mergeById(local, remote){
+  const map = new Map();
+  // Prefer items with newer timestamps if both have them
+  [...local, ...remote].forEach(item => {
+    const ex = map.get(item.id);
+    if (!ex){
+      map.set(item.id, item);
+    } else {
+      // Keep the one with later updatedAt or createdAt
+      const exTime = new Date(ex.updatedAt || ex.createdAt || 0).getTime();
+      const itemTime = new Date(item.updatedAt || item.createdAt || 0).getTime();
+      if (itemTime > exTime) map.set(item.id, item);
+    }
+  });
   return [...map.values()];
 }
 
@@ -2025,6 +2196,12 @@ async function syncToSheet(){
 
   // Capsules sync separately
   await syncCapsulesToSheet();
+  await syncBucketsToSheet();
+  await syncDailyToSheet();
+  await syncQOTDToSheet();
+  await syncNotesToSheet();
+  await syncIdeasToSheet();
+  await syncPrefsToSheet();
 
   localStorage.setItem(LS.LAST_SYNC, new Date().toISOString());
   updateSettingsTimes();
@@ -2245,7 +2422,17 @@ async function writeBackup(showToast){
   try {
     const today = todayStr();
     const ts = new Date().toISOString();
-    const snapshot = { stories: state.stories, photos: state.photos, capsules: state.capsules };
+    const snapshot = {
+      stories: state.stories,
+      photos: state.photos,
+      capsules: state.capsules,
+      buckets: state.buckets,
+      daily: state.daily,
+      qotdAnswers: state.qotdAnswers,
+      notes: state.notes,
+      ideas: state.ideas,
+      highlights: state.highlights,
+    };
     const snapStr = JSON.stringify(snapshot);
 
     const res = await gapi.client.sheets.spreadsheets.values.get({
@@ -2321,10 +2508,22 @@ async function restoreSelectedBackup(){
     state.stories = snap.stories || [];
     state.photos = snap.photos || [];
     state.capsules = snap.capsules || [];
+    state.buckets = snap.buckets || [];
+    state.daily = snap.daily || [];
+    state.qotdAnswers = snap.qotdAnswers || [];
+    state.notes = snap.notes || [];
+    state.ideas = snap.ideas || [];
+    state.highlights = snap.highlights || [];
     state.stories.sort((a,b)=> (b.year - a.year) || (b.month - a.month));
     saveLS(LS.STORIES, state.stories);
     saveLS(LS.PHOTOS, state.photos);
     saveLS(LS.CAPSULES, state.capsules);
+    saveLS(LS.BUCKETS, state.buckets);
+    saveLS(LS.DAILY, state.daily);
+    saveLS(LS.QOTD, state.qotdAnswers);
+    saveLS(LS.NOTES, state.notes);
+    saveLS(LS.IDEAS, state.ideas);
+    saveLS(LS.HIGHLIGHTS, state.highlights);
     renderAll();
     renderYearView();
     renderCapsules();
@@ -2342,7 +2541,15 @@ async function restoreSelectedBackup(){
 // ───────────────────────────────────────────────
 function exportData(){
   const payload = {
-    stories: state.stories, photos: state.photos, capsules: state.capsules,
+    stories: state.stories,
+    photos: state.photos,
+    capsules: state.capsules,
+    buckets: state.buckets,
+    daily: state.daily,
+    qotdAnswers: state.qotdAnswers,
+    notes: state.notes,
+    ideas: state.ideas,
+    highlights: state.highlights,
     exportedAt: new Date().toISOString()
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
@@ -3180,6 +3387,1430 @@ function startSeasonalEffects(){
   setInterval(spawn, config.rate);
 }
 
+
+// ═══════════════════════════════════════════════════════════════
+// MEMORY MAP
+// ═══════════════════════════════════════════════════════════════
+let _memoryMap = null;
+let _mapMarkers = [];
+const _geoCache = {};
+
+async function geocodePlace(place){
+  if (!place) return null;
+  const cached = _geoCache[place];
+  if (cached) return cached;
+  // Try sessionStorage cache
+  try {
+    const stored = JSON.parse(sessionStorage.getItem('sr_geo') || '{}');
+    if (stored[place]){
+      _geoCache[place] = stored[place];
+      return stored[place];
+    }
+  } catch {}
+
+  try {
+    // Use Nominatim (free, OpenStreetMap)
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(place)}&format=json&limit=1&accept-language=th`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data || data.length === 0) return null;
+    const result = { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon), display: data[0].display_name };
+    _geoCache[place] = result;
+    try {
+      const stored = JSON.parse(sessionStorage.getItem('sr_geo') || '{}');
+      stored[place] = result;
+      sessionStorage.setItem('sr_geo', JSON.stringify(stored));
+    } catch {}
+    return result;
+  } catch(e){
+    console.warn('Geocoding failed for', place, e);
+    return null;
+  }
+}
+
+async function renderMemoryMap(){
+  const wrap = $('#memoryMap');
+  const empty = $('#mapEmpty');
+  if (!wrap) return;
+
+  const placedStories = state.stories.filter(s => s.place && s.place.trim());
+  if (placedStories.length === 0){
+    wrap.classList.add('hidden');
+    empty.classList.remove('hidden');
+    return;
+  }
+  wrap.classList.remove('hidden');
+  empty.classList.add('hidden');
+
+  if (typeof L === 'undefined'){
+    wrap.innerHTML = '<p style="padding:40px;text-align:center" class="muted">กำลังโหลดแผนที่...</p>';
+    setTimeout(renderMemoryMap, 800);
+    return;
+  }
+
+  // Init map once (default Thailand center)
+  if (!_memoryMap){
+    _memoryMap = L.map(wrap, { scrollWheelZoom: true, attributionControl: true }).setView([13.736, 100.523], 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; OpenStreetMap'
+    }).addTo(_memoryMap);
+  }
+
+  // Clear old markers
+  _mapMarkers.forEach(m => _memoryMap.removeLayer(m));
+  _mapMarkers = [];
+
+  toast('กำลังปักหมุด...', '', 2000);
+
+  const monthsTH = ['','ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+  const bounds = [];
+  for (const story of placedStories){
+    const geo = await geocodePlace(story.place);
+    if (!geo) continue;
+    const moodEm = story.mood ? MOOD_EMOJI[story.mood] || '' : '';
+    const dateLabel = story.day ? `${story.day} ${monthsTH[story.month]} ${story.year}` : `${monthsTH[story.month]} ${story.year}`;
+    const popup = `
+      <div>
+        <h5>${escapeHtml(story.title)} ${moodEm}</h5>
+        <small>${escapeHtml(story.place)} · ${dateLabel}</small>
+        <p>${escapeHtml((story.text||'').slice(0, 80))}${story.text && story.text.length > 80 ? '...' : ''}</p>
+        <a class="popup-link" data-story-id="${story.id}">เปิดอ่าน →</a>
+      </div>`;
+    const marker = L.marker([geo.lat, geo.lon]).addTo(_memoryMap).bindPopup(popup);
+    marker.on('popupopen', e => {
+      const link = e.popup.getElement().querySelector('.popup-link');
+      if (link) link.addEventListener('click', () => openStory(story.id));
+    });
+    _mapMarkers.push(marker);
+    bounds.push([geo.lat, geo.lon]);
+  }
+
+  if (bounds.length > 0){
+    _memoryMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
+  }
+
+  // Refresh map size in case container was hidden when initialized
+  setTimeout(() => _memoryMap?.invalidateSize(), 200);
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// STATS DASHBOARD
+// ═══════════════════════════════════════════════════════════════
+function renderStats(){
+  const wrap = $('#statsContent');
+  if (!wrap) return;
+
+  const start = new Date(CONFIG.ANNIV_YEAR, CONFIG.ANNIV_MONTH-1, CONFIG.ANNIV_DAY);
+  const now = new Date();
+  const totalDays = Math.floor((now - start) / 86400000);
+  const totalMonths = monthsSinceStart();
+  const totalStories = state.stories.length;
+  const storiesByAuthor = state.stories.reduce((acc, s) => {
+    acc[s.author||'?'] = (acc[s.author||'?']||0)+1; return acc;
+  }, {});
+  const totalPhotos = state.photos.length;
+  const totalVoice = state.stories.filter(s => s.voice_drive_id).length;
+
+  // Mood breakdown
+  const moodCount = {};
+  state.stories.forEach(s => {
+    if (s.mood) moodCount[s.mood] = (moodCount[s.mood]||0)+1;
+  });
+  const totalMooded = Object.values(moodCount).reduce((a,b)=>a+b,0) || 1;
+  const moodLabels = {
+    happy:'มีความสุข', love:'หวานชื่น', sad:'เหงาๆ',
+    excited:'ตื่นเต้น', peaceful:'สงบ', bittersweet:'เศร้าแต่สวย'
+  };
+  const moodOrder = Object.keys(moodCount).sort((a,b) => moodCount[b]-moodCount[a]);
+  const topMood = moodOrder[0];
+
+  // Top places
+  const placeCount = {};
+  state.stories.forEach(s => {
+    const p = (s.place||'').trim();
+    if (p) placeCount[p] = (placeCount[p]||0)+1;
+  });
+  const topPlaces = Object.entries(placeCount).sort((a,b) => b[1]-a[1]).slice(0, 5);
+
+  // Best month (most stories with photos)
+  const monthScore = {};
+  state.stories.forEach(s => {
+    const photos = getStoryPhotos(s.id).length;
+    const key = `${s.year}-${String(s.month).padStart(2,'0')}`;
+    monthScore[key] = (monthScore[key]||0) + 1 + photos*0.5 + (s.voice_drive_id?2:0);
+  });
+  const sweetestMonth = Object.entries(monthScore).sort((a,b)=>b[1]-a[1])[0];
+  const monthsTH = ['','มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน',
+                    'กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+  let sweetestLabel = '—';
+  if (sweetestMonth){
+    const [y, m] = sweetestMonth[0].split('-');
+    sweetestLabel = `${monthsTH[parseInt(m,10)]} ${y}`;
+  }
+
+  // Bucket stats
+  const totalBuckets = state.buckets.length;
+  const doneBuckets = state.buckets.filter(b => b.done).length;
+
+  wrap.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat-card hero">
+        <div class="stat-num">${totalDays.toLocaleString()}</div>
+        <div class="stat-label">DAYS TOGETHER</div>
+      </div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-num">${totalMonths}</div><div class="stat-label">MONTHIVERSARIES</div></div>
+      <div class="stat-card"><div class="stat-num">${totalStories}</div><div class="stat-label">STORIES</div></div>
+      <div class="stat-card"><div class="stat-num">${totalPhotos}</div><div class="stat-label">PHOTOS</div></div>
+      <div class="stat-card"><div class="stat-num">${totalVoice}</div><div class="stat-label">VOICE NOTES</div></div>
+      <div class="stat-card"><div class="stat-num">${storiesByAuthor['Safe']||0}</div><div class="stat-label">BY SAFE</div></div>
+      <div class="stat-card"><div class="stat-num">${storiesByAuthor['Ruang']||0}</div><div class="stat-label">BY RUANG</div></div>
+    </div>
+
+    <div class="stat-block">
+      <h4>💖 Sweetest Month</h4>
+      <p class="muted" style="font-family:var(--display);font-size:24px;margin:0;color:var(--gold)">${sweetestLabel}</p>
+    </div>
+
+    ${moodOrder.length > 0 ? `
+      <div class="stat-block">
+        <h4>😊 Mood Breakdown</h4>
+        <div class="mood-bar-list">
+          ${moodOrder.map(m => {
+            const pct = (moodCount[m]/totalMooded*100).toFixed(0);
+            return `
+              <div class="mood-row">
+                <span class="mood-emoji">${MOOD_EMOJI[m]||''}</span>
+                <span class="mood-name">${moodLabels[m]||m}</span>
+                <div class="mood-bar-track"><div class="mood-bar-fill" style="width:${pct}%"></div></div>
+                <span class="mood-count">${moodCount[m]}</span>
+              </div>`;
+          }).join('')}
+        </div>
+        ${topMood ? `<p class="muted small" style="margin-top:12px">เดือนหวานที่สุดของเราคือ <b>${moodLabels[topMood]} ${MOOD_EMOJI[topMood]}</b></p>` : ''}
+      </div>
+    ` : ''}
+
+    ${topPlaces.length > 0 ? `
+      <div class="stat-block">
+        <h4>📍 Top Places</h4>
+        <div class="place-list">
+          ${topPlaces.map(([p, c]) => `
+            <div class="place-row">
+              <span class="place-name">${escapeHtml(p)}</span>
+              <span class="place-count">${c}</span>
+            </div>`).join('')}
+        </div>
+      </div>
+    ` : ''}
+
+    ${totalBuckets > 0 ? `
+      <div class="stat-block">
+        <h4>🎯 Bucket List Progress</h4>
+        <div class="mood-row">
+          <span class="mood-name">${doneBuckets} / ${totalBuckets}</span>
+          <div class="mood-bar-track"><div class="mood-bar-fill" style="width:${(doneBuckets/totalBuckets*100).toFixed(0)}%"></div></div>
+          <span class="mood-count">${(doneBuckets/totalBuckets*100).toFixed(0)}%</span>
+        </div>
+      </div>
+    ` : ''}
+
+    ${(()=>{const streak = computeLoveStreak(); return streak > 0 ? `
+      <div class="stat-block">
+        <h4>❤️ Love Streak</h4>
+        <div class="streak-display">
+          <div class="streak-num"><span class="streak-fire">🔥</span>${streak}</div>
+          <div class="streak-label">${streak === 1 ? 'MONTH' : 'CONSECUTIVE MONTHS'}</div>
+        </div>
+        <p class="muted small" style="margin-top:10px;text-align:center">${streak >= 12 ? '🏆 1 ปีเต็มไม่พลาด!' : streak >= 6 ? '✨ ครึ่งปีเต็ม' : 'เก็บเรื่องราวต่อไปนะ'}</p>
+      </div>
+    ` : '';})()}
+
+    ${(()=>{const awards = computeAwards(); return awards.length > 0 ? `
+      <div class="stat-block">
+        <h4>🏆 Memory Awards</h4>
+        <div class="awards-grid">
+          ${awards.map(a => `
+            <div class="award-card">
+              <div class="award-icon">${a.icon}</div>
+              <div class="award-title">${a.title}</div>
+              <div class="award-value">${escapeHtml(a.value)}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    ` : '';})()}
+  `;
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// BUCKET LIST
+// ═══════════════════════════════════════════════════════════════
+function initBucket(){
+  const form = $('#bucketForm');
+  if (!form) return;
+  form.addEventListener('submit', onAddBucket);
+  $$('.bucket-filter').forEach(b => {
+    b.addEventListener('click', () => {
+      $$('.bucket-filter').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      state.bucketFilter = b.dataset.filter;
+      renderBucketList();
+    });
+  });
+}
+
+const BUCKET_CAT_EMOJI = {
+  travel: '✈️', food: '🍜', experience: '✨', goal: '🏆', other: '💭'
+};
+
+async function onAddBucket(e){
+  e.preventDefault();
+  const title = $('#bucketTitle').value.trim();
+  const cat = $('#bucketCategory').value;
+  if (!title){ toast('ใส่สิ่งที่อยากทำก่อน', 'error'); return; }
+
+  const item = {
+    id: uid('bk'),
+    title, category: cat,
+    done: false,
+    createdBy: state.user,
+    createdAt: new Date().toISOString(),
+    doneAt: '',
+  };
+  state.buckets.push(item);
+  saveLS(LS.BUCKETS, state.buckets);
+  $('#bucketTitle').value = '';
+  renderBucketList();
+  if (state.google.accessToken){
+    try { await syncBucketsToSheet(); } catch(e){ console.error(e); }
+  }
+  toast('เพิ่มแล้ว ♥', 'success');
+}
+
+function renderBucketList(){
+  const wrap = $('#bucketList');
+  if (!wrap) return;
+  let items = [...state.buckets];
+  if (state.bucketFilter === 'pending') items = items.filter(b => !b.done);
+  if (state.bucketFilter === 'done') items = items.filter(b => b.done);
+
+  // Sort: pending first, then by createdAt desc
+  items.sort((a,b) => {
+    if (a.done !== b.done) return a.done ? 1 : -1;
+    return new Date(b.createdAt) - new Date(a.createdAt);
+  });
+
+  if (items.length === 0){
+    wrap.innerHTML = '<p class="muted small" style="text-align:center;padding:24px">— ยังไม่มี —</p>';
+    return;
+  }
+
+  wrap.innerHTML = items.map(b => `
+    <div class="bucket-item ${b.done ? 'done' : ''}" data-id="${b.id}">
+      <div class="bucket-checkbox ${b.done ? 'checked' : ''}" data-toggle="${b.id}"></div>
+      <span class="bucket-cat">${BUCKET_CAT_EMOJI[b.category] || '💭'}</span>
+      <span class="bucket-text">${escapeHtml(b.title)}</span>
+      <span class="bucket-by">by ${escapeHtml(b.createdBy||'—')}</span>
+      <button class="bucket-delete" data-delete="${b.id}">✕</button>
+    </div>
+  `).join('');
+
+  $$('.bucket-checkbox[data-toggle]').forEach(el => {
+    el.addEventListener('click', () => toggleBucket(el.dataset.toggle));
+  });
+  $$('.bucket-delete[data-delete]').forEach(el => {
+    el.addEventListener('click', () => deleteBucket(el.dataset.delete));
+  });
+}
+
+async function toggleBucket(id){
+  const item = state.buckets.find(b => b.id === id);
+  if (!item) return;
+  item.done = !item.done;
+  item.doneAt = item.done ? new Date().toISOString() : '';
+  saveLS(LS.BUCKETS, state.buckets);
+  renderBucketList();
+  if (state.google.accessToken){
+    try { await syncBucketsToSheet(); } catch(e){}
+  }
+  if (item.done) toast('🎉 ทำสำเร็จแล้ว!', 'success');
+}
+
+async function deleteBucket(id){
+  if (!confirm('ลบสิ่งนี้?')) return;
+  state.buckets = state.buckets.filter(b => b.id !== id);
+  saveLS(LS.BUCKETS, state.buckets);
+  renderBucketList();
+  if (state.google.accessToken){
+    try { await syncBucketsToSheet(); } catch(e){}
+  }
+}
+
+async function syncBucketsToSheet(){
+  if (!state.google.accessToken || !state.google.sheetId) return;
+  const values = state.buckets.map(b => [
+    b.id, b.title||'', b.category||'', b.done?'1':'0',
+    b.createdBy||'', b.createdAt||'', b.doneAt||'',
+  ]);
+  await gapi.client.sheets.spreadsheets.values.clear({
+    spreadsheetId: state.google.sheetId,
+    range: `${CONFIG.TAB_BUCKETS}!A2:G`,
+  });
+  if (values.length){
+    await gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId: state.google.sheetId,
+      range: `${CONFIG.TAB_BUCKETS}!A2`,
+      valueInputOption: 'RAW',
+      resource: { values },
+    });
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// DAILY ONE-LINE JOURNAL
+// ═══════════════════════════════════════════════════════════════
+function initDaily(){
+  const form = $('#dailyForm');
+  if (!form) return;
+  form.addEventListener('submit', onAddDaily);
+  // Show today's date
+  const today = new Date();
+  const monthsTH = ['','มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน',
+                    'กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+  $('#dailyDate').textContent = `วันนี้: ${today.getDate()} ${monthsTH[today.getMonth()+1]} ${today.getFullYear()}`;
+}
+
+async function onAddDaily(e){
+  e.preventDefault();
+  const text = $('#dailyText').value.trim();
+  if (!text){ toast('เขียนอะไรสักหน่อย', 'error'); return; }
+
+  const today = new Date();
+  const dateStr = todayStr(today);
+  const item = {
+    id: uid('dly'),
+    date: dateStr,
+    year: today.getFullYear(),
+    month: today.getMonth() + 1,
+    day: today.getDate(),
+    text,
+    author: state.user,
+    createdAt: today.toISOString(),
+  };
+  state.daily.push(item);
+  saveLS(LS.DAILY, state.daily);
+  $('#dailyText').value = '';
+  renderDaily();
+  if (state.google.accessToken){
+    try { await syncDailyToSheet(); } catch(e){ console.error(e); }
+  }
+  toast('บันทึกแล้ว ♥', 'success');
+}
+
+function renderDaily(){
+  const wrap = $('#dailyList');
+  const archive = $('#dailyArchive');
+  if (!wrap) return;
+
+  const now = new Date();
+  const curY = now.getFullYear();
+  const curM = now.getMonth() + 1;
+
+  const sorted = [...state.daily].sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const thisMonth = sorted.filter(d => d.year === curY && d.month === curM);
+  const past = sorted.filter(d => !(d.year === curY && d.month === curM));
+
+  const monthsTH = ['','มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน',
+                    'กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+
+  if (thisMonth.length === 0){
+    wrap.innerHTML = '<p class="muted small" style="text-align:center;padding:18px">— เริ่มเขียนบรรทัดแรกของเดือนนี้กันเถอะ —</p>';
+  } else {
+    wrap.innerHTML = thisMonth.map(d => `
+      <div class="daily-row">
+        <div class="daily-day">${d.day}<em>${monthsTH[d.month].slice(0,3)}</em></div>
+        <div class="daily-text-content">
+          <p>${escapeHtml(d.text)}</p>
+          <span class="daily-by">by ${escapeHtml(d.author||'—')}</span>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // Group past by year-month
+  if (archive){
+    if (past.length === 0){
+      archive.innerHTML = '<p class="muted small" style="padding:8px">— ไม่มีเดือนเก่า —</p>';
+    } else {
+      const byMonth = {};
+      past.forEach(d => {
+        const key = `${d.year}-${String(d.month).padStart(2,'0')}`;
+        if (!byMonth[key]) byMonth[key] = [];
+        byMonth[key].push(d);
+      });
+      const keys = Object.keys(byMonth).sort().reverse();
+      archive.innerHTML = keys.map(k => {
+        const [y, m] = k.split('-');
+        const items = byMonth[k];
+        return `
+          <div class="daily-month-block">
+            <h5>${monthsTH[parseInt(m,10)]} ${y}</h5>
+            ${items.map(d => `
+              <div class="daily-row">
+                <div class="daily-day">${d.day}<em>${monthsTH[d.month].slice(0,3)}</em></div>
+                <div class="daily-text-content">
+                  <p>${escapeHtml(d.text)}</p>
+                  <span class="daily-by">by ${escapeHtml(d.author||'—')}</span>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }).join('');
+    }
+  }
+}
+
+async function syncDailyToSheet(){
+  if (!state.google.accessToken || !state.google.sheetId) return;
+  const values = state.daily.map(d => [
+    d.id, d.date, d.year, d.month, d.day, d.text||'', d.author||'', d.createdAt||'',
+  ]);
+  await gapi.client.sheets.spreadsheets.values.clear({
+    spreadsheetId: state.google.sheetId,
+    range: `${CONFIG.TAB_DAILY}!A2:H`,
+  });
+  if (values.length){
+    await gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId: state.google.sheetId,
+      range: `${CONFIG.TAB_DAILY}!A2`,
+      valueInputOption: 'RAW',
+      resource: { values },
+    });
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// QUESTION OF THE DAY
+// ═══════════════════════════════════════════════════════════════
+const QOTD_BANK = [
+  'สิ่งที่ทำให้คุณรักเค้ามากที่สุดคืออะไร?',
+  'ถ้ามีอำนาจวิเศษ 1 ข้อในความสัมพันธ์ จะใช้ทำอะไร?',
+  'นิสัยของอีกฝ่ายที่คุณรักที่สุดคืออะไร?',
+  'ความทรงจำเดทแรกที่จำได้ดีที่สุดคืออะไร?',
+  'ถ้าวันนี้เป็นวันสุดท้าย คุณอยากบอกเค้าว่าอะไร?',
+  'คุณอยากแก่ตัวลงด้วยกันยังไง?',
+  'สิ่งที่คุณ "ขอบคุณ" เค้าที่สุดคืออะไร?',
+  '5 ปีข้างหน้า คุณอยากเห็นเรา 2 คนเป็นยังไง?',
+  'อะไรในความสัมพันธ์นี้ที่ทำให้คุณรู้สึกปลอดภัยที่สุด?',
+  'มีเรื่องอะไรที่อยากทำกับเค้าก่อนตาย?',
+  'นิยามคำว่า "บ้าน" สำหรับคุณคืออะไร?',
+  'สิ่งที่เค้าเปลี่ยนคุณไปในทางที่ดี?',
+  'ถ้าเขียนหนังสือเรื่องเรา จะตั้งชื่ออะไร?',
+  'เพลงที่คุณนึกถึงเค้าทุกครั้งที่ได้ฟัง?',
+  'อาหารที่ทำให้นึกถึงช่วงเวลาดี ๆ ที่อยู่ด้วยกัน?',
+  'สิ่งที่เค้าทำให้ คุณยังไม่เคยขอบคุณ?',
+  'ถ้าได้กลับไปเลือกเดทแรกใหม่ จะเลือกที่ไหน?',
+  'นิสัยเล็ก ๆ ของเค้าที่ขำมากแต่รัก?',
+  'อะไรในตัวเองที่อยากพัฒนาเพื่อความสัมพันธ์?',
+  'ความฝันร่วมกันที่ยังไม่ได้บอกใคร?',
+  'วันที่หวานที่สุดในชีวิตคู่ที่ผ่านมา?',
+  'สิ่งที่อยากให้เค้าทำให้บ่อยขึ้น?',
+  'ถ้าจะเขียนจดหมายรักให้ตัวเองในอดีต จะเขียนอะไร?',
+  'ช่วงเวลาที่รู้สึกว่า "นี่แหละ คนนี้แหละ"?',
+  'สิ่งที่อยากให้คนรุ่นหลังจำเกี่ยวกับเรา?',
+];
+
+function getTodayQuestion(){
+  const today = new Date();
+  const dayOfYear = Math.floor((today - new Date(today.getFullYear(), 0, 0)) / 86400000);
+  const idx = (dayOfYear + today.getFullYear()) % QOTD_BANK.length;
+  return { id: `q_${todayStr(today)}`, date: todayStr(today), text: QOTD_BANK[idx] };
+}
+
+function renderQOTD(){
+  const todayQ = getTodayQuestion();
+  const wrap = $('#qotdToday');
+  const history = $('#qotdHistory');
+  if (!wrap) return;
+
+  const myAnswer = state.qotdAnswers.find(a => a.qid === todayQ.id && a.author === state.user);
+  const partnerAnswer = state.qotdAnswers.find(a => a.qid === todayQ.id && a.author !== state.user);
+
+  const otherUser = state.user === 'Safe' ? 'Ruang' : 'Safe';
+
+  if (myAnswer){
+    // Already answered — show both (or partner pending)
+    wrap.innerHTML = `
+      <div class="qotd-eyebrow">— TODAY · ${todayQ.date} —</div>
+      <div class="qotd-question">${escapeHtml(todayQ.text)}</div>
+      <div class="qotd-answers">
+        <div class="qotd-answer-row">
+          <div class="author">${state.user} (คุณ)</div>
+          <p>${escapeHtml(myAnswer.text)}</p>
+        </div>
+        ${partnerAnswer ? `
+          <div class="qotd-answer-row">
+            <div class="author">${escapeHtml(partnerAnswer.author)}</div>
+            <p>${escapeHtml(partnerAnswer.text)}</p>
+          </div>
+        ` : `
+          <div class="qotd-answer-row locked">
+            <div class="author">${otherUser}</div>
+            <p>— ยังไม่ได้ตอบ —</p>
+          </div>
+        `}
+      </div>
+    `;
+  } else {
+    // Not answered yet
+    wrap.innerHTML = `
+      <div class="qotd-eyebrow">— TODAY · ${todayQ.date} —</div>
+      <div class="qotd-question">${escapeHtml(todayQ.text)}</div>
+      <div class="qotd-answer-box">
+        <label>คำตอบของคุณ</label>
+        <textarea id="qotdInput" rows="3" placeholder="เขียนคำตอบ..."></textarea>
+        <button type="button" class="qotd-submit" id="qotdSubmit">💾 บันทึกคำตอบ</button>
+      </div>
+    `;
+    $('#qotdSubmit').addEventListener('click', () => submitQOTDAnswer(todayQ));
+  }
+
+  // History — past questions both answered
+  const allQids = [...new Set(state.qotdAnswers.map(a => a.qid))].filter(qid => qid !== todayQ.id);
+  if (history){
+    if (allQids.length === 0){
+      history.innerHTML = '<p class="muted small" style="text-align:center;padding:14px">— ยังไม่มีคำถามเก่า —</p>';
+    } else {
+      // Sort by qid (which contains date)
+      allQids.sort().reverse();
+      history.innerHTML = allQids.map(qid => {
+        const answers = state.qotdAnswers.filter(a => a.qid === qid);
+        const dateStr = qid.replace('q_', '');
+        const qText = answers[0]?.qtext || '?';
+        const bothAnswered = answers.length >= 2;
+        return `
+          <div class="qotd-history-item" data-qid="${qid}">
+            <p class="q">${escapeHtml(qText)}</p>
+            <div class="meta">
+              <span>${dateStr}</span>
+              <span>${bothAnswered ? '✓ ทั้งคู่ตอบแล้ว' : `เห็นแค่ ${answers.length}/2`}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+      $$('.qotd-history-item').forEach(el => {
+        el.addEventListener('click', () => openQOTDHistory(el.dataset.qid));
+      });
+    }
+  }
+}
+
+async function submitQOTDAnswer(q){
+  const text = $('#qotdInput').value.trim();
+  if (!text){ toast('เขียนคำตอบก่อน', 'error'); return; }
+
+  const answer = {
+    id: uid('qa'),
+    qid: q.id,
+    qtext: q.text,
+    date: q.date,
+    text,
+    author: state.user,
+    createdAt: new Date().toISOString(),
+  };
+  state.qotdAnswers.push(answer);
+  saveLS(LS.QOTD, state.qotdAnswers);
+  renderQOTD();
+  if (state.google.accessToken){
+    try { await syncQOTDToSheet(); } catch(e){ console.error(e); }
+  }
+  toast('บันทึกแล้ว ♥', 'success');
+}
+
+function openQOTDHistory(qid){
+  const answers = state.qotdAnswers.filter(a => a.qid === qid);
+  if (answers.length === 0) return;
+  const qText = answers[0].qtext || '?';
+  const dateStr = qid.replace('q_', '');
+
+  $('#modalContent').innerHTML = `
+    <div class="mc-body">
+      <p class="mc-eyebrow">${dateStr}</p>
+      <h2 class="mc-title">${escapeHtml(qText)}</h2>
+      <div style="margin-top:24px;display:flex;flex-direction:column;gap:14px">
+        ${answers.map(a => `
+          <div style="background:var(--bg-input);border-radius:12px;padding:14px 16px;border-left:3px solid var(--gold)">
+            <div style="font-family:var(--serif);font-style:italic;letter-spacing:.2em;text-transform:uppercase;font-size:11px;color:var(--gold);margin-bottom:6px">${escapeHtml(a.author)}</div>
+            <p style="margin:0;font-size:15px;line-height:1.7;color:var(--text-main)">${escapeHtml(a.text)}</p>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+  $('#storyModal').classList.remove('hidden');
+}
+
+async function syncQOTDToSheet(){
+  if (!state.google.accessToken || !state.google.sheetId) return;
+  const values = state.qotdAnswers.map(a => [
+    a.id, a.qid, a.qtext||'', a.date, a.text||'', a.author||'', a.createdAt||'',
+  ]);
+  await gapi.client.sheets.spreadsheets.values.clear({
+    spreadsheetId: state.google.sheetId,
+    range: `${CONFIG.TAB_QOTD}!A2:G`,
+  });
+  if (values.length){
+    await gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId: state.google.sheetId,
+      range: `${CONFIG.TAB_QOTD}!A2`,
+      valueInputOption: 'RAW',
+      resource: { values },
+    });
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// YEAR-END RECAP
+// ═══════════════════════════════════════════════════════════════
+function initRecap(){
+  const sel = $('#recapYear');
+  if (!sel) return;
+  populateRecapYears();
+  $('#playRecapBtn').addEventListener('click', playRecap);
+  $('#recapClose').addEventListener('click', closeRecap);
+}
+
+function populateRecapYears(){
+  const sel = $('#recapYear');
+  if (!sel) return;
+  const years = [...new Set(state.stories.map(s=>s.year))].sort((a,b)=>b-a);
+  sel.innerHTML = years.map(y => `<option value="${y}">${y}</option>`).join('') || '<option value="">— ยังไม่มีข้อมูล —</option>';
+}
+
+async function playRecap(){
+  const year = parseInt($('#recapYear').value, 10);
+  if (!year){ toast('เลือกปีก่อน', 'error'); return; }
+
+  const yearStories = state.stories.filter(s => s.year === year);
+  if (yearStories.length === 0){ toast('ไม่มี story ของปีนี้', 'error'); return; }
+
+  // Sort by month/day
+  yearStories.sort((a,b)=>(a.month - b.month) || ((a.day||0) - (b.day||0)));
+
+  // Build slides
+  const slides = [];
+  // Intro slide
+  slides.push({
+    type: 'intro',
+    eyebrow: '— our year in review —',
+    title: `${year}`,
+    text: `${yearStories.length} stories ที่เก็บไว้ด้วยกัน`,
+    image: null,
+  });
+
+  // For each story, add a slide with first photo
+  for (const s of yearStories){
+    const photos = getStoryPhotos(s.id);
+    let imageUrl = null;
+    if (photos[0]){
+      if (photos[0].drive_id){
+        imageUrl = await fetchImageBlobUrl(photos[0].drive_id) || getPhotoSrc(photos[0]);
+      } else {
+        imageUrl = getPhotoSrc(photos[0]);
+      }
+    }
+    const monthsTH = ['','มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน',
+                      'กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+    slides.push({
+      type: 'story',
+      eyebrow: `${monthsTH[s.month]} ${year}${s.day ? ` · ${s.day}` : ''}`,
+      title: s.title,
+      text: (s.text||'').slice(0, 140) + (s.text && s.text.length > 140 ? '...' : ''),
+      image: imageUrl,
+    });
+  }
+
+  // Outro slide
+  slides.push({
+    type: 'outro',
+    eyebrow: '— forever and always —',
+    title: 'Safe & Ruang',
+    text: 'ขอบคุณที่ผ่านมาด้วยกัน ♥',
+    image: null,
+  });
+
+  state.recap.slides = slides;
+  state.recap.idx = 0;
+
+  $('#recapModal').classList.remove('hidden');
+
+  // Start music if enabled
+  const music = $('#bgMusic');
+  if (music && music.paused){
+    music.play().catch(()=>{});
+  }
+
+  showRecapSlide(0);
+
+  // Auto-advance every 4 seconds
+  if (state.recap.interval) clearInterval(state.recap.interval);
+  state.recap.interval = setInterval(()=>{
+    state.recap.idx++;
+    if (state.recap.idx >= slides.length){
+      closeRecap();
+    } else {
+      showRecapSlide(state.recap.idx);
+    }
+  }, 4500);
+}
+
+function showRecapSlide(idx){
+  const slide = state.recap.slides[idx];
+  if (!slide) return;
+  const img = $('#recapImg');
+  const eyebrow = $('#recapEyebrow');
+  const title = $('#recapTitle');
+  const text = $('#recapText');
+
+  // Fade out, swap, fade in
+  const wrap = $('#recapSlide');
+  wrap.classList.remove('active');
+  setTimeout(()=>{
+    if (slide.image){
+      img.src = slide.image;
+      img.style.display = 'block';
+    } else {
+      img.style.display = 'none';
+    }
+    eyebrow.textContent = slide.eyebrow;
+    title.textContent = slide.title;
+    text.textContent = slide.text;
+    wrap.classList.add('active');
+  }, 300);
+}
+
+function closeRecap(){
+  if (state.recap.interval){ clearInterval(state.recap.interval); state.recap.interval = null; }
+  $('#recapModal').classList.add('hidden');
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// LOVE NOTES
+// ═══════════════════════════════════════════════════════════════
+function initNotes(){
+  const form = $('#noteForm');
+  if (!form) return;
+  form.addEventListener('submit', onSendNote);
+  $$('.notes-filter').forEach(b => {
+    b.addEventListener('click', () => {
+      $$('.notes-filter').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      state.notesView = b.dataset.view;
+      renderNotes();
+    });
+  });
+}
+
+async function onSendNote(e){
+  e.preventDefault();
+  const text = $('#noteText').value.trim();
+  if (!text){ toast('เขียนข้อความก่อน', 'error'); return; }
+
+  const recipient = state.user === 'Safe' ? 'Ruang' : 'Safe';
+  const note = {
+    id: uid('nt'),
+    from: state.user,
+    to: recipient,
+    text,
+    createdAt: new Date().toISOString(),
+    readAt: '',
+  };
+  state.notes.push(note);
+  saveLS(LS.NOTES, state.notes);
+  $('#noteText').value = '';
+  renderNotes();
+  if (state.google.accessToken){
+    try { await syncNotesToSheet(); } catch(e){ console.error(e); }
+  }
+  toast('💌 ส่งแล้ว', 'success');
+}
+
+function renderNotes(){
+  const wrap = $('#notesList');
+  const recipientEl = $('#noteRecipient');
+  const badge = $('#inboxBadge');
+  if (!wrap) return;
+
+  if (recipientEl) recipientEl.textContent = state.user === 'Safe' ? 'Ruang' : 'Safe';
+
+  // Inbox count badge
+  const unreadCount = state.notes.filter(n => n.to === state.user && !n.readAt).length;
+  if (badge){
+    if (unreadCount > 0){
+      badge.textContent = unreadCount;
+      badge.classList.remove('hidden');
+    } else {
+      badge.classList.add('hidden');
+    }
+  }
+
+  let items = [...state.notes];
+  if (state.notesView === 'inbox'){
+    items = items.filter(n => n.to === state.user);
+  } else {
+    items = items.filter(n => n.from === state.user);
+  }
+  items.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  if (items.length === 0){
+    wrap.innerHTML = `<p class="muted small" style="text-align:center;padding:24px">— ${state.notesView === 'inbox' ? 'ยังไม่มีข้อความใหม่' : 'ยังไม่ได้ส่งข้อความ'} —</p>`;
+    return;
+  }
+
+  wrap.innerHTML = items.map(n => `
+    <div class="note-item ${state.notesView === 'inbox' && !n.readAt ? 'unread' : ''}" data-id="${n.id}">
+      <div class="note-from">${state.notesView === 'inbox' ? `จาก ${escapeHtml(n.from)}` : `ถึง ${escapeHtml(n.to)}`}</div>
+      <p class="note-text">${escapeHtml(n.text)}</p>
+      <div class="note-time">${formatRelativeTime(n.createdAt)}</div>
+      <button class="note-delete" data-del="${n.id}">✕</button>
+    </div>
+  `).join('');
+
+  $$('.note-delete[data-del]').forEach(el => {
+    el.addEventListener('click', e => {
+      e.stopPropagation();
+      deleteNote(el.dataset.del);
+    });
+  });
+
+  // Mark all visible inbox notes as read after a moment
+  if (state.notesView === 'inbox' && unreadCount > 0){
+    setTimeout(() => markInboxRead(), 1500);
+  }
+}
+
+async function markInboxRead(){
+  let changed = false;
+  state.notes.forEach(n => {
+    if (n.to === state.user && !n.readAt){
+      n.readAt = new Date().toISOString();
+      changed = true;
+    }
+  });
+  if (changed){
+    saveLS(LS.NOTES, state.notes);
+    renderNotes();
+    if (state.google.accessToken){
+      try { await syncNotesToSheet(); } catch(e){}
+    }
+  }
+}
+
+async function deleteNote(id){
+  if (!confirm('ลบข้อความนี้?')) return;
+  state.notes = state.notes.filter(n => n.id !== id);
+  saveLS(LS.NOTES, state.notes);
+  renderNotes();
+  if (state.google.accessToken){
+    try { await syncNotesToSheet(); } catch(e){}
+  }
+}
+
+function formatRelativeTime(iso){
+  const now = Date.now();
+  const t = new Date(iso).getTime();
+  const diff = (now - t) / 1000;
+  if (diff < 60) return 'เมื่อกี้นี้';
+  if (diff < 3600) return `${Math.floor(diff/60)} นาทีที่แล้ว`;
+  if (diff < 86400) return `${Math.floor(diff/3600)} ชม.ที่แล้ว`;
+  if (diff < 604800) return `${Math.floor(diff/86400)} วันที่แล้ว`;
+  return new Date(iso).toLocaleDateString('th-TH');
+}
+
+async function syncNotesToSheet(){
+  if (!state.google.accessToken || !state.google.sheetId) return;
+  const values = state.notes.map(n => [
+    n.id, n.from||'', n.to||'', n.text||'', n.createdAt||'', n.readAt||'',
+  ]);
+  await gapi.client.sheets.spreadsheets.values.clear({
+    spreadsheetId: state.google.sheetId,
+    range: `${CONFIG.TAB_NOTES}!A2:F`,
+  });
+  if (values.length){
+    await gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId: state.google.sheetId,
+      range: `${CONFIG.TAB_NOTES}!A2`,
+      valueInputOption: 'RAW',
+      resource: { values },
+    });
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// DATE IDEAS
+// ═══════════════════════════════════════════════════════════════
+const DEFAULT_IDEAS = [
+  { text: 'ทำอาหารเย็นด้วยกัน', emoji: '🍽️' },
+  { text: 'ดูพระอาทิตย์ตกที่ริมทะเล', emoji: '💐' },
+  { text: 'ดูหนังเก่าที่เคยดูครั้งแรก', emoji: '🎬' },
+  { text: 'เดินตลาดนัดกลางคืน', emoji: '🍽️' },
+  { text: 'ขี่จักรยานในสวน', emoji: '🎨' },
+  { text: 'ทำพิซซ่ากินเองที่บ้าน', emoji: '🏠' },
+];
+
+function initIdeas(){
+  // Seed default ideas if empty
+  if (state.ideas.length === 0){
+    state.ideas = DEFAULT_IDEAS.map(i => ({
+      id: uid('id'),
+      text: i.text,
+      emoji: i.emoji,
+      addedBy: 'system',
+      createdAt: new Date().toISOString(),
+    }));
+    saveLS(LS.IDEAS, state.ideas);
+  }
+  const form = $('#ideaForm');
+  if (!form) return;
+  form.addEventListener('submit', onAddIdea);
+  $('#rollIdeaBtn').addEventListener('click', rollIdea);
+}
+
+async function onAddIdea(e){
+  e.preventDefault();
+  const text = $('#ideaInput').value.trim();
+  const emoji = $('#ideaCat').value;
+  if (!text){ toast('ใส่ไอเดียก่อน', 'error'); return; }
+
+  const idea = {
+    id: uid('id'),
+    text, emoji,
+    addedBy: state.user,
+    createdAt: new Date().toISOString(),
+  };
+  state.ideas.push(idea);
+  saveLS(LS.IDEAS, state.ideas);
+  $('#ideaInput').value = '';
+  renderIdeas();
+  if (state.google.accessToken){
+    try { await syncIdeasToSheet(); } catch(e){}
+  }
+  toast('เพิ่มแล้ว ♥', 'success');
+}
+
+function renderIdeas(){
+  const wrap = $('#ideaList');
+  if (!wrap) return;
+
+  if (state.ideas.length === 0){
+    wrap.innerHTML = '<p class="muted small" style="text-align:center;padding:14px">— ยังไม่มีไอเดีย —</p>';
+    return;
+  }
+
+  const sorted = [...state.ideas].sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+  wrap.innerHTML = sorted.map(i => `
+    <div class="idea-row" data-id="${i.id}">
+      <span class="iemoji">${i.emoji || '🎲'}</span>
+      <span class="itext">${escapeHtml(i.text)}</span>
+      <span class="iby">by ${escapeHtml(i.addedBy === 'system' ? '✨' : i.addedBy)}</span>
+      <button class="idea-del" data-del="${i.id}">✕</button>
+    </div>
+  `).join('');
+
+  $$('.idea-del[data-del]').forEach(el => {
+    el.addEventListener('click', () => deleteIdea(el.dataset.del));
+  });
+}
+
+function rollIdea(){
+  if (state.ideas.length === 0){
+    toast('ยังไม่มีไอเดีย — เพิ่มสักหน่อยก่อน', 'error');
+    return;
+  }
+  const pick = state.ideas[Math.floor(Math.random() * state.ideas.length)];
+  const emojiEl = $('#ideaEmoji');
+  const textEl = $('#ideaText');
+  const metaEl = $('#ideaMeta');
+
+  emojiEl.classList.remove('spinning');
+  void emojiEl.offsetWidth; // restart animation
+  emojiEl.classList.add('spinning');
+
+  emojiEl.textContent = pick.emoji || '🎲';
+  textEl.textContent = pick.text;
+  metaEl.textContent = `— ${pick.addedBy === 'system' ? '✨ default' : `by ${pick.addedBy}`} —`;
+}
+
+async function deleteIdea(id){
+  if (!confirm('ลบไอเดียนี้?')) return;
+  state.ideas = state.ideas.filter(i => i.id !== id);
+  saveLS(LS.IDEAS, state.ideas);
+  renderIdeas();
+  if (state.google.accessToken){
+    try { await syncIdeasToSheet(); } catch(e){}
+  }
+}
+
+async function syncIdeasToSheet(){
+  if (!state.google.accessToken || !state.google.sheetId) return;
+  const values = state.ideas.map(i => [
+    i.id, i.text||'', i.emoji||'', i.addedBy||'', i.createdAt||'',
+  ]);
+  await gapi.client.sheets.spreadsheets.values.clear({
+    spreadsheetId: state.google.sheetId,
+    range: `${CONFIG.TAB_IDEAS}!A2:E`,
+  });
+  if (values.length){
+    await gapi.client.sheets.spreadsheets.values.update({
+      spreadsheetId: state.google.sheetId,
+      range: `${CONFIG.TAB_IDEAS}!A2`,
+      valueInputOption: 'RAW',
+      resource: { values },
+    });
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// HIGHLIGHTS / FEATURED STORIES
+// ═══════════════════════════════════════════════════════════════
+function isHighlight(storyId){
+  return state.highlights.includes(storyId);
+}
+
+async function toggleHighlight(storyId){
+  const idx = state.highlights.indexOf(storyId);
+  if (idx >= 0){
+    state.highlights.splice(idx, 1);
+    toast('ลบจาก Highlights', '', 1500);
+  } else {
+    state.highlights.unshift(storyId);
+    toast('⭐ เพิ่มเข้า Highlights', 'success', 1500);
+  }
+  saveLS(LS.HIGHLIGHTS, state.highlights);
+  renderHighlights();
+  renderAll();
+  if (state.google.accessToken){
+    try { await syncPrefsToSheet(); } catch(e){ console.warn(e); }
+  }
+}
+
+async function syncPrefsToSheet(){
+  if (!state.google.accessToken || !state.google.sheetId) return;
+  const values = [
+    ['highlights', JSON.stringify(state.highlights)],
+  ];
+  await gapi.client.sheets.spreadsheets.values.clear({
+    spreadsheetId: state.google.sheetId,
+    range: `${CONFIG.TAB_PREFS}!A2:B`,
+  });
+  await gapi.client.sheets.spreadsheets.values.update({
+    spreadsheetId: state.google.sheetId,
+    range: `${CONFIG.TAB_PREFS}!A2`,
+    valueInputOption: 'RAW',
+    resource: { values },
+  });
+}
+
+function renderHighlights(){
+  const section = $('#highlightsSection');
+  const row = $('#highlightsRow');
+  if (!section || !row) return;
+
+  const hStories = state.highlights
+    .map(id => state.stories.find(s => s.id === id))
+    .filter(Boolean);
+
+  if (hStories.length === 0){
+    section.classList.add('hidden');
+    return;
+  }
+  section.classList.remove('hidden');
+
+  const monthsTH = ['','ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+  row.innerHTML = hStories.map(s => {
+    const photos = getStoryPhotos(s.id);
+    const cover = photos[0] ? getPhotoSrc(photos[0]) : null;
+    const driveAttr = (photos[0] && photos[0].drive_id) ? ` data-drive-id="${photos[0].drive_id}"` : '';
+    const dateLabel = `${monthsTH[s.month]} ${s.year}`;
+    return `
+      <div class="highlight-card" data-id="${s.id}">
+        ${cover ? `<img src="${cover}" alt=""${driveAttr}/>` : '<div style="width:100%;height:100%;background:var(--navy-mid)"></div>'}
+        <div class="highlight-overlay">
+          <h5>${escapeHtml(s.title)}</h5>
+          <div class="h-meta">${dateLabel}${s.place ? ` · ${escapeHtml(s.place)}` : ''}</div>
+        </div>
+        <div class="highlight-star">⭐</div>
+      </div>
+    `;
+  }).join('');
+
+  $$('.highlight-card').forEach(c => {
+    c.addEventListener('click', () => openStory(c.dataset.id));
+  });
+
+  hydrateImages(row);
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// MEMORY ROULETTE
+// ═══════════════════════════════════════════════════════════════
+function initRoulette(){
+  const btn = $('#rouletteBtn');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    if (state.stories.length === 0){
+      toast('ยังไม่มี story เลย', 'error');
+      return;
+    }
+    btn.classList.remove('spinning');
+    void btn.offsetWidth;
+    btn.classList.add('spinning');
+    setTimeout(() => {
+      const random = state.stories[Math.floor(Math.random() * state.stories.length)];
+      openStory(random.id);
+    }, 600);
+  });
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// PHOTO WALL
+// ═══════════════════════════════════════════════════════════════
+function initPhotoWall(){
+  const buttons = $$('.view-btn[data-view]');
+  buttons.forEach(b => {
+    b.addEventListener('click', () => {
+      buttons.forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      state.mapView = b.dataset.view;
+      const map = $('#memoryMap');
+      const wall = $('#photoWall');
+      if (state.mapView === 'wall'){
+        map.classList.add('hidden');
+        wall.classList.remove('hidden');
+        renderPhotoWall();
+      } else {
+        map.classList.remove('hidden');
+        wall.classList.add('hidden');
+        if (_memoryMap) setTimeout(() => _memoryMap.invalidateSize(), 200);
+      }
+    });
+  });
+}
+
+function renderPhotoWall(){
+  const wall = $('#photoWall');
+  if (!wall) return;
+
+  // Get all photos sorted by story date desc
+  const photoEntries = [];
+  for (const s of state.stories){
+    const ps = getStoryPhotos(s.id);
+    ps.forEach(p => {
+      photoEntries.push({ photo: p, story: s });
+    });
+  }
+  photoEntries.sort((a,b) =>
+    (b.story.year - a.story.year) ||
+    (b.story.month - a.story.month) ||
+    ((b.story.day||0) - (a.story.day||0))
+  );
+
+  if (photoEntries.length === 0){
+    wall.innerHTML = '<p class="muted" style="grid-column:1/-1;text-align:center;padding:40px">— ยังไม่มีรูปภาพ —</p>';
+    return;
+  }
+
+  wall.innerHTML = photoEntries.map(({photo, story}) => {
+    const src = getPhotoSrc(photo);
+    const dAttr = photo.drive_id ? ` data-drive-id="${photo.drive_id}"` : '';
+    return `
+      <div class="wall-photo" data-story-id="${story.id}" title="${escapeHtml(story.title)}">
+        ${src ? `<img src="${src}" alt=""${dAttr} loading="lazy"/>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  $$('.wall-photo[data-story-id]').forEach(el => {
+    el.addEventListener('click', () => openStory(el.dataset.storyId));
+  });
+
+  // Hydrate images
+  hydrateImages(wall);
+  // Mark loaded for fade-in
+  wall.querySelectorAll('img').forEach(img => {
+    if (img.complete) img.classList.add('loaded');
+    else img.addEventListener('load', () => img.classList.add('loaded'));
+  });
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// NOTIFICATIONS
+// ═══════════════════════════════════════════════════════════════
+function initNotifications(){
+  const btn = $('#enableNotifBtn');
+  const status = $('#notifStatus');
+  if (!btn) return;
+
+  function updateStatus(){
+    if (!('Notification' in window)){
+      status.textContent = 'เครื่องนี้ไม่รองรับ';
+      btn.disabled = true;
+      return;
+    }
+    if (Notification.permission === 'granted'){
+      status.textContent = '✓ เปิดอยู่';
+      btn.textContent = '🔕 ปิดการแจ้งเตือน';
+    } else if (Notification.permission === 'denied'){
+      status.textContent = '⛔ ถูก block — แก้ใน Browser Settings';
+      btn.disabled = true;
+    } else {
+      status.textContent = '— ยังไม่ได้เปิด';
+    }
+  }
+
+  btn.addEventListener('click', async () => {
+    if (Notification.permission === 'granted'){
+      // No native way to revoke from JS — just remind
+      toast('ปิดได้ที่ Browser Settings', '', 3000);
+      return;
+    }
+    const result = await Notification.requestPermission();
+    updateStatus();
+    if (result === 'granted'){
+      new Notification('Safe ♥ Ruang', {
+        body: 'การแจ้งเตือนเปิดเรียบร้อย — จะเตือนทุกวันที่ 8 ของเดือน',
+        icon: 'icon-192.png',
+      });
+      checkMonthiversaryNotif();
+    }
+  });
+
+  updateStatus();
+  checkMonthiversaryNotif();
+}
+
+function checkMonthiversaryNotif(){
+  if (!('Notification' in window)) return;
+  if (Notification.permission !== 'granted') return;
+
+  const today = new Date();
+  if (today.getDate() !== CONFIG.ANNIV_DAY) return;
+
+  const todayKey = todayStr(today);
+  const lastShown = localStorage.getItem(LS.NOTIF_LAST);
+  if (lastShown === todayKey) return;
+
+  const months = monthsSinceStart();
+  new Notification('💕 Happy Monthiversary!', {
+    body: `${months} เดือนแล้วนะ เก็บความทรงจำเดือนนี้กันเถอะ ♥`,
+    icon: 'icon-192.png',
+  });
+  localStorage.setItem(LS.NOTIF_LAST, todayKey);
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// AWARDS & STREAK (extends Stats)
+// ═══════════════════════════════════════════════════════════════
+function computeLoveStreak(){
+  if (state.stories.length === 0) return 0;
+  // Get sorted unique year-month combos with stories
+  const monthSet = new Set(state.stories.map(s => `${s.year}-${String(s.month).padStart(2,'0')}`));
+  const months = [...monthSet].sort().reverse();
+  if (months.length === 0) return 0;
+
+  // Count consecutive months back from latest
+  let streak = 1;
+  for (let i = 0; i < months.length - 1; i++){
+    const [y1, m1] = months[i].split('-').map(Number);
+    const [y2, m2] = months[i+1].split('-').map(Number);
+    // Previous month?
+    const expectedY = m1 === 1 ? y1 - 1 : y1;
+    const expectedM = m1 === 1 ? 12 : m1 - 1;
+    if (y2 === expectedY && m2 === expectedM) streak++;
+    else break;
+  }
+  return streak;
+}
+
+function computeAwards(){
+  const awards = [];
+
+  // 💖 Sweetest Month
+  const monthScore = {};
+  state.stories.forEach(s => {
+    const photos = getStoryPhotos(s.id).length;
+    const key = `${s.year}-${String(s.month).padStart(2,'0')}`;
+    monthScore[key] = (monthScore[key]||0) + 1 + photos*0.5 + (s.voice_drive_id?2:0);
+  });
+  const sw = Object.entries(monthScore).sort((a,b)=>b[1]-a[1])[0];
+  if (sw){
+    const monthsTH = ['','ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+    const [y,m] = sw[0].split('-');
+    awards.push({ icon: '💖', title: 'Sweetest Month', value: `${monthsTH[parseInt(m,10)]} ${y}` });
+  }
+
+  // 📷 Most Photos in One Story
+  const photoCount = state.stories.map(s => ({
+    title: s.title,
+    count: getStoryPhotos(s.id).length,
+  })).sort((a,b) => b.count - a.count)[0];
+  if (photoCount && photoCount.count > 0){
+    awards.push({ icon: '📷', title: 'Most Photos', value: `${photoCount.count} 📷 — ${photoCount.title}` });
+  }
+
+  // 🎤 Most Voice Notes
+  const voiceCount = state.stories.filter(s => s.voice_drive_id).length;
+  if (voiceCount > 0){
+    awards.push({ icon: '🎤', title: 'Voice Notes', value: `${voiceCount} เสียง` });
+  }
+
+  // ✍️ Most Active Author
+  const byAuthor = state.stories.reduce((acc, s) => {
+    acc[s.author||'?'] = (acc[s.author||'?']||0)+1;
+    return acc;
+  }, {});
+  const topAuthor = Object.entries(byAuthor).sort((a,b)=>b[1]-a[1])[0];
+  if (topAuthor){
+    awards.push({ icon: '✍️', title: 'Most Active', value: `${topAuthor[0]} (${topAuthor[1]} เรื่อง)` });
+  }
+
+  // 🌍 Most Visited Place
+  const placeCount = {};
+  state.stories.forEach(s => {
+    const p = (s.place||'').trim();
+    if (p) placeCount[p] = (placeCount[p]||0)+1;
+  });
+  const topPlace = Object.entries(placeCount).sort((a,b)=>b[1]-a[1])[0];
+  if (topPlace && topPlace[1] >= 2){
+    awards.push({ icon: '📍', title: 'Favorite Place', value: `${topPlace[0]} (${topPlace[1]}×)` });
+  }
+
+  // 🌟 First Story
+  const oldest = [...state.stories].sort((a,b) =>
+    (a.year - b.year) || (a.month - b.month) || ((a.day||0) - (b.day||0))
+  )[0];
+  if (oldest){
+    awards.push({ icon: '🌟', title: 'First Story', value: oldest.title });
+  }
+
+  return awards;
+}
 
 // ═══════════════════════════════════════════════════════════════
 // BOOT
