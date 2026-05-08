@@ -335,7 +335,16 @@
 
         <div class="field">
           <label>สถานที่ <span class="hint">(ไม่จำเป็น)</span></label>
-          <input type="text" id="storyPlace" maxlength="120" />
+          <div class="place-input-row">
+            <input type="text" id="storyPlace" maxlength="120" placeholder="พิมพ์ชื่อ หรือกดแผนที่ →" />
+            <button type="button" id="placePickerBtn" class="place-pin-btn" title="เลือกบนแผนที่">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            </button>
+          </div>
+          <div id="placeCoords" class="place-coords hidden">
+            <span class="place-coords-text"></span>
+            <button type="button" id="placeClearBtn" class="place-clear-btn" title="ลบพิกัด">×</button>
+          </div>
         </div>
 
         <div class="field">
@@ -751,6 +760,34 @@
 <div id="heartLayer" class="heart-layer"></div>
 <div id="seasonalLayer" class="seasonal-layer"></div>
 <div id="toast" class="toast"></div>
+
+<!-- Place Picker Modal -->
+<div id="placePickerModal" class="modal hidden" role="dialog" aria-labelledby="ppTitle">
+  <div class="pp-content">
+    <div class="pp-header">
+      <h3 id="ppTitle">📍 เลือกสถานที่</h3>
+      <button type="button" class="pp-close" id="ppCloseBtn" aria-label="ปิด">×</button>
+    </div>
+    <div class="pp-search-row">
+      <input type="text" id="ppSearchInput" placeholder="🔍 ค้นหาสถานที่..." autocomplete="off" />
+      <button type="button" id="ppMyLocBtn" class="pp-myloc-btn" title="ตำแหน่งของฉัน">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+      </button>
+    </div>
+    <div id="ppSuggestions" class="pp-suggestions hidden"></div>
+    <div id="ppMap" class="pp-map"></div>
+    <div class="pp-selected" id="ppSelected">
+      <div class="pp-selected-info">
+        <div class="pp-selected-name" id="ppSelectedName">ยังไม่ได้เลือก</div>
+        <div class="pp-selected-coords" id="ppSelectedCoords"></div>
+      </div>
+    </div>
+    <div class="pp-actions">
+      <button type="button" class="btn-ghost" id="ppCancelBtn">ยกเลิก</button>
+      <button type="button" class="btn-primary" id="ppConfirmBtn" disabled>✓ ใช้สถานที่นี้</button>
+    </div>
+  </div>
+</div>
 
 <!-- Background music (lazy loaded) -->
 <audio id="bgMusic" loop preload="none">

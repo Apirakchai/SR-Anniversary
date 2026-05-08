@@ -268,6 +268,7 @@ function initApp(){
 
   initTabs();
   initForm();
+  initPlacePicker();
   initSettings();
   initModal();
   initLogout();
@@ -395,6 +396,242 @@ function stopMusic(){
   $('#musicToggle').classList.remove('active');
   localStorage.setItem(LS.MUSIC_ON, 'false');
 }
+
+
+// ───────────────────────────────────────────────
+// PLACE PICKER (map modal + autocomplete + geolocation)
+// ───────────────────────────────────────────────
+let _ppMap = null, _ppMarker = null;
+let _ppSelected = null; // {lat, lng, name}
+let _ppSearchTimer = null;
+
+function buildMapsUrl(lat, lng){
+  return `https://www.google.com/maps?q=${lat.toFixed(6)},${lng.toFixed(6)}`;
+}
+
+function updatePlaceCoordsUI(){
+  const box = $('#placeCoords');
+  const txt = box?.querySelector('.place-coords-text');
+  if (!box || !txt) return;
+  if (state.pendingPlacePin?.lat != null && state.pendingPlacePin?.lng != null){
+    txt.textContent = `📍 ${state.pendingPlacePin.lat.toFixed(5)}, ${state.pendingPlacePin.lng.toFixed(5)}`;
+    box.classList.remove('hidden');
+  } else {
+    box.classList.add('hidden');
+  }
+}
+
+function initPlacePicker(){
+  const btn = $('#placePickerBtn');
+  if (btn) btn.addEventListener('click', openPlacePicker);
+  const clearBtn = $('#placeClearBtn');
+  if (clearBtn) clearBtn.addEventListener('click', ()=>{
+    state.pendingPlacePin = null;
+    updatePlaceCoordsUI();
+  });
+
+  const closeBtn = $('#ppCloseBtn');
+  const cancelBtn = $('#ppCancelBtn');
+  const confirmBtn = $('#ppConfirmBtn');
+  const myLocBtn = $('#ppMyLocBtn');
+  const searchInput = $('#ppSearchInput');
+
+  if (closeBtn) closeBtn.addEventListener('click', closePlacePicker);
+  if (cancelBtn) cancelBtn.addEventListener('click', closePlacePicker);
+  if (confirmBtn) confirmBtn.addEventListener('click', confirmPlacePicker);
+  if (myLocBtn) myLocBtn.addEventListener('click', useMyLocation);
+
+  if (searchInput){
+    searchInput.addEventListener('input', e=>{
+      const q = e.target.value.trim();
+      clearTimeout(_ppSearchTimer);
+      if (q.length < 2){
+        $('#ppSuggestions').classList.add('hidden');
+        return;
+      }
+      _ppSearchTimer = setTimeout(()=>searchPlaces(q), 500);
+    });
+  }
+}
+
+function openPlacePicker(){
+  $('#placePickerModal').classList.remove('hidden');
+  // Pre-fill from existing pin or from place input text
+  setTimeout(()=>{
+    if (!_ppMap){
+      // Initial center: Bangkok area (Thailand) or existing pin
+      const initLat = state.pendingPlacePin?.lat ?? 13.7563;
+      const initLng = state.pendingPlacePin?.lng ?? 100.5018;
+      _ppMap = L.map('ppMap', { zoomControl: true }).setView([initLat, initLng], state.pendingPlacePin ? 15 : 11);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution:'&copy; OSM',
+        maxZoom: 19,
+      }).addTo(_ppMap);
+      _ppMap.on('click', e=>{
+        setMarker(e.latlng.lat, e.latlng.lng);
+        reverseGeocode(e.latlng.lat, e.latlng.lng);
+      });
+    } else {
+      _ppMap.invalidateSize();
+    }
+    // If editing — show existing pin
+    if (state.pendingPlacePin?.lat != null){
+      setMarker(state.pendingPlacePin.lat, state.pendingPlacePin.lng);
+      _ppSelected = {
+        lat: state.pendingPlacePin.lat,
+        lng: state.pendingPlacePin.lng,
+        name: $('#storyPlace').value.trim() || `${state.pendingPlacePin.lat.toFixed(4)}, ${state.pendingPlacePin.lng.toFixed(4)}`,
+      };
+      updateSelectedUI();
+    } else {
+      // Pre-search if there's a place name typed
+      const placeText = $('#storyPlace').value.trim();
+      if (placeText){
+        $('#ppSearchInput').value = placeText;
+        searchPlaces(placeText);
+      }
+    }
+  }, 100);
+}
+
+function closePlacePicker(){
+  $('#placePickerModal').classList.add('hidden');
+  $('#ppSuggestions').classList.add('hidden');
+  $('#ppSearchInput').value = '';
+}
+
+function setMarker(lat, lng){
+  if (!_ppMap) return;
+  if (_ppMarker){
+    _ppMarker.setLatLng([lat, lng]);
+  } else {
+    _ppMarker = L.marker([lat, lng], { draggable: true }).addTo(_ppMap);
+    _ppMarker.on('dragend', e=>{
+      const ll = e.target.getLatLng();
+      reverseGeocode(ll.lat, ll.lng);
+    });
+  }
+  _ppSelected = { lat, lng, name: _ppSelected?.name || '' };
+  updateSelectedUI();
+}
+
+function updateSelectedUI(){
+  const nameEl = $('#ppSelectedName');
+  const coordsEl = $('#ppSelectedCoords');
+  const confirmBtn = $('#ppConfirmBtn');
+  if (!_ppSelected){
+    nameEl.textContent = 'ยังไม่ได้เลือก';
+    nameEl.classList.add('empty');
+    coordsEl.textContent = '';
+    confirmBtn.disabled = true;
+    return;
+  }
+  nameEl.textContent = _ppSelected.name || '(ไม่มีชื่อ)';
+  nameEl.classList.remove('empty');
+  coordsEl.textContent = `${_ppSelected.lat.toFixed(5)}, ${_ppSelected.lng.toFixed(5)}`;
+  confirmBtn.disabled = false;
+}
+
+async function searchPlaces(q){
+  const sugBox = $('#ppSuggestions');
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=6&accept-language=th`;
+    const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    const results = await res.json();
+    if (!Array.isArray(results) || !results.length){
+      sugBox.innerHTML = '<div class="pp-suggestion"><span class="pp-suggestion-text" style="color:var(--text-soft)">ไม่พบสถานที่</span></div>';
+      sugBox.classList.remove('hidden');
+      return;
+    }
+    sugBox.innerHTML = results.map(r=>`
+      <div class="pp-suggestion" data-lat="${r.lat}" data-lng="${r.lon}" data-name="${escapeHtml(r.display_name)}">
+        <span class="pp-suggestion-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+        </span>
+        <span class="pp-suggestion-text">${escapeHtml(r.display_name)}</span>
+      </div>
+    `).join('');
+    sugBox.classList.remove('hidden');
+    sugBox.querySelectorAll('.pp-suggestion[data-lat]').forEach(el=>{
+      el.addEventListener('click', ()=>{
+        const lat = parseFloat(el.dataset.lat);
+        const lng = parseFloat(el.dataset.lng);
+        const name = el.dataset.name;
+        _ppMap.setView([lat, lng], 16);
+        setMarker(lat, lng);
+        _ppSelected = { lat, lng, name };
+        updateSelectedUI();
+        sugBox.classList.add('hidden');
+        $('#ppSearchInput').value = name.split(',')[0].trim(); // short name
+      });
+    });
+  } catch(err){
+    console.error('Search error:', err);
+    sugBox.innerHTML = '<div class="pp-suggestion"><span class="pp-suggestion-text" style="color:var(--rose-deep)">ค้นหาไม่ได้ — ลองใหม่</span></div>';
+    sugBox.classList.remove('hidden');
+  }
+}
+
+async function reverseGeocode(lat, lng){
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&accept-language=th`;
+    const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    const data = await res.json();
+    const name = data.display_name || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+    _ppSelected = { lat, lng, name };
+    updateSelectedUI();
+    // Auto-fill the search input with short name
+    const shortName = name.split(',')[0].trim();
+    if (shortName) $('#ppSearchInput').value = shortName;
+  } catch(err){
+    console.warn('Reverse geocode failed:', err);
+    _ppSelected = { lat, lng, name: `${lat.toFixed(4)}, ${lng.toFixed(4)}` };
+    updateSelectedUI();
+  }
+}
+
+function useMyLocation(){
+  const btn = $('#ppMyLocBtn');
+  if (!navigator.geolocation){
+    toast('Browser ไม่รองรับ Geolocation', 'error');
+    return;
+  }
+  btn.classList.add('loading');
+  navigator.geolocation.getCurrentPosition(
+    pos=>{
+      btn.classList.remove('loading');
+      const { latitude, longitude } = pos.coords;
+      _ppMap.setView([latitude, longitude], 16);
+      setMarker(latitude, longitude);
+      reverseGeocode(latitude, longitude);
+    },
+    err=>{
+      btn.classList.remove('loading');
+      const msg = err.code === 1 ? 'อนุญาตการเข้าถึงตำแหน่งใน Settings' : 'หาตำแหน่งไม่ได้';
+      toast(msg, 'error', 4000);
+    },
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+}
+
+function confirmPlacePicker(){
+  if (!_ppSelected) return;
+  const { lat, lng, name } = _ppSelected;
+  state.pendingPlacePin = {
+    lat, lng,
+    mapsUrl: buildMapsUrl(lat, lng),
+  };
+  // Auto-fill place input if empty
+  const placeInput = $('#storyPlace');
+  if (!placeInput.value.trim() && name){
+    // Take first part before comma
+    placeInput.value = name.split(',')[0].trim();
+  }
+  updatePlaceCoordsUI();
+  closePlacePicker();
+  toast('📍 บันทึกตำแหน่งแล้ว', 'success');
+}
+
 
 
 // ───────────────────────────────────────────────
@@ -665,6 +902,7 @@ function resetForm(){
   state.pendingPhotos = [];
   state.pendingVoiceBlob = null;
   state.pendingVoiceDriveId = null;
+  state.pendingPlacePin = null;
   state.selectedMood = null;
   $('#storyId').value = '';
   $('#storyTitle').value = '';
@@ -675,6 +913,7 @@ function resetForm(){
   $('#formTitle').textContent = 'เพิ่มเรื่องราวเดือนใหม่';
   $$('.mood-btn').forEach(b=>b.classList.remove('active'));
   resetVoiceUI();
+  updatePlaceCoordsUI();
   const now = new Date();
   $('#storyMonth').value = now.getMonth()+1;
   $('#storyYear').value = now.getFullYear();
@@ -1004,6 +1243,7 @@ async function onSaveStory(e){
   const title = $('#storyTitle').value.trim();
   const text = $('#storyText').value.trim();
   const place = $('#storyPlace').value.trim();
+  const placePin = state.pendingPlacePin; // {lat, lng, mapsUrl} or null
   const mood = state.selectedMood || '';
 
   if (!title){ toast('ใส่หัวข้อด้วยนะ', 'error'); return; }
@@ -1067,6 +1307,9 @@ async function onSaveStory(e){
     voice_drive_id: voiceDriveId || '',
     author: state.user,
     updatedAt: new Date().toISOString(),
+    lat: placePin?.lat ?? null,
+    lng: placePin?.lng ?? null,
+    mapsUrl: placePin?.mapsUrl || '',
   };
 
   const existing = state.stories.findIndex(s=>s.id===id);
@@ -1421,7 +1664,10 @@ function openStory(id){
       <h2 class="mc-title">${escapeHtml(s.title)}</h2>
       <div class="mc-meta">
         <span>by ${escapeHtml(s.author || '—')}</span>
-        ${s.place ? `<span>📍 ${escapeHtml(s.place)}</span>` : ''}
+        ${s.place ? (s.mapsUrl
+          ? `<a href="${s.mapsUrl}" target="_blank" rel="noopener" class="mc-place-link">📍 ${escapeHtml(s.place)} ↗</a>`
+          : `<span>📍 ${escapeHtml(s.place)}</span>`
+        ) : ''}
         <span>${new Date(s.updatedAt).toLocaleDateString('th-TH')}</span>
       </div>
       <div class="mc-text">${escapeHtml(s.text || '— no story yet —')}</div>
@@ -1485,6 +1731,14 @@ function editStory(id){
   $('#storyTitle').value = s.title;
   $('#storyText').value = s.text || '';
   $('#storyPlace').value = s.place || '';
+  // Load place pin if exists
+  if (s.lat != null && s.lng != null){
+    state.pendingPlacePin = { lat: s.lat, lng: s.lng, mapsUrl: s.mapsUrl || `https://www.google.com/maps?q=${s.lat},${s.lng}` };
+    updatePlaceCoordsUI();
+  } else {
+    state.pendingPlacePin = null;
+    updatePlaceCoordsUI();
+  }
   $('#formTitle').textContent = '✎ แก้ไขเรื่องราว';
 
   $$('.mood-btn').forEach(b => b.classList.toggle('active', b.dataset.mood === s.mood));
@@ -1978,25 +2232,23 @@ async function migrateStoriesSchema(){
   try {
     const r = await gapi.client.sheets.spreadsheets.values.get({
       spreadsheetId: state.google.sheetId,
-      range: `${CONFIG.TAB_STORIES}!A1:K1`,
+      range: `${CONFIG.TAB_STORIES}!A1:N1`,
     });
     const headers = r.result.values?.[0] || [];
-    // If column D (index 3) is NOT 'day' — old schema → need to migrate
+
+    // Migration #1: old schema without 'day' column
     if (headers[3] !== 'day' && headers.length > 3){
       console.log('Migrating Stories schema: inserting day column at index 3');
-      // Read all existing data rows
       const allRows = await gapi.client.sheets.spreadsheets.values.get({
         spreadsheetId: state.google.sheetId,
         range: `${CONFIG.TAB_STORIES}!A2:J`,  // old schema had 10 cols
       });
       const oldRows = allRows.result.values || [];
-      // Insert empty day column at index 3
       const newRows = oldRows.map(row => {
         const r = [...row];
         r.splice(3, 0, ''); // insert empty day at position 3
         return r;
       });
-      // Clear and rewrite
       await gapi.client.sheets.spreadsheets.values.clear({
         spreadsheetId: state.google.sheetId,
         range: `${CONFIG.TAB_STORIES}!A2:K`,
@@ -2011,6 +2263,18 @@ async function migrateStoriesSchema(){
       }
       console.log(`Migrated ${newRows.length} stories with empty day column`);
     }
+
+    // Migration #2: add lat/lng/mapsUrl columns (L,M,N) if missing
+    // No data move needed — just write new headers; existing rows just have empty L:N
+    if (headers[11] !== 'lat' || headers[12] !== 'lng' || headers[13] !== 'mapsUrl'){
+      console.log('Adding lat/lng/mapsUrl columns to Stories schema');
+      await gapi.client.sheets.spreadsheets.values.update({
+        spreadsheetId: state.google.sheetId,
+        range: `${CONFIG.TAB_STORIES}!A1:N1`,
+        valueInputOption: 'RAW',
+        resource: { values: [['id','year','month','day','title','text','place','author','mood','voice_drive_id','updatedAt','lat','lng','mapsUrl']] },
+      });
+    }
   } catch(e){
     console.warn('Schema migration check failed (might be empty sheet):', e);
   }
@@ -2018,7 +2282,7 @@ async function migrateStoriesSchema(){
 
 async function writeHeaders(){
   const updates = [
-    {range: `${CONFIG.TAB_STORIES}!A1:K1`, values: [['id','year','month','day','title','text','place','author','mood','voice_drive_id','updatedAt']]},
+    {range: `${CONFIG.TAB_STORIES}!A1:N1`, values: [['id','year','month','day','title','text','place','author','mood','voice_drive_id','updatedAt','lat','lng','mapsUrl']]},
     {range: `${CONFIG.TAB_PHOTOS}!A1:F1`,  values: [['id','story_id','drive_id','name','dataURL_fallback','thumbnail_url']]},
     {range: `${CONFIG.TAB_BACKUPS}!A1:D1`, values: [['date','timestamp','story_count','snapshot_json']]},
     {range: `${CONFIG.TAB_CAPSULES}!A1:F1`,values: [['id','title','text','author','createdAt','openAt']]},
@@ -2067,7 +2331,7 @@ async function pullFromSheet(){
 
   try {
     const [storyRows, photoRows, capsuleRows, bucketRows, dailyRows, qotdRows, noteRows, ideaRows, prefRows] = await Promise.all([
-      safeGet(`${CONFIG.TAB_STORIES}!A2:K`),
+      safeGet(`${CONFIG.TAB_STORIES}!A2:N`),
       safeGet(`${CONFIG.TAB_PHOTOS}!A2:F`),
       safeGet(`${CONFIG.TAB_CAPSULES}!A2:F`),
       safeGet(`${CONFIG.TAB_BUCKETS}!A2:G`),
@@ -2090,6 +2354,9 @@ async function pullFromSheet(){
       mood: r[8] || '',
       voice_drive_id: r[9] || '',
       updatedAt: r[10] || '',
+      lat: r[11] ? parseFloat(r[11]) : null,
+      lng: r[12] ? parseFloat(r[12]) : null,
+      mapsUrl: r[13] || '',
     })).filter(s=>s.id);
 
     const remotePhotos = photoRows.map(r=>({
@@ -2253,6 +2520,9 @@ async function syncToSheet(){
     s.id, s.year, s.month, (s.day != null ? s.day : ''),
     s.title || '', s.text || '', s.place || '',
     s.author || '', s.mood || '', s.voice_drive_id || '', s.updatedAt || '',
+    (s.lat != null && s.lat !== '') ? s.lat : '',
+    (s.lng != null && s.lng !== '') ? s.lng : '',
+    s.mapsUrl || '',
   ]);
 
   const photoValues = state.photos.map(p=>{
@@ -2266,7 +2536,7 @@ async function syncToSheet(){
   await Promise.all([
     gapi.client.sheets.spreadsheets.values.clear({
       spreadsheetId: state.google.sheetId,
-      range: `${CONFIG.TAB_STORIES}!A2:K`,
+      range: `${CONFIG.TAB_STORIES}!A2:N`,
     }),
     gapi.client.sheets.spreadsheets.values.clear({
       spreadsheetId: state.google.sheetId,
@@ -3584,7 +3854,10 @@ async function renderMemoryMap(){
   const empty = $('#mapEmpty');
   if (!wrap) return;
 
-  const placedStories = state.stories.filter(s => s.place && s.place.trim());
+  // Filter: stories with either place name OR pinned coordinates
+  const placedStories = state.stories.filter(s =>
+    (s.place && s.place.trim()) || (s.lat != null && s.lng != null)
+  );
   if (placedStories.length === 0){
     wrap.classList.add('hidden');
     empty.classList.remove('hidden');
@@ -3611,29 +3884,47 @@ async function renderMemoryMap(){
   _mapMarkers.forEach(m => _memoryMap.removeLayer(m));
   _mapMarkers = [];
 
-  toast('กำลังปักหมุด...', '', 2000);
+  // Count how many need geocoding (no stored coords)
+  const needGeocode = placedStories.filter(s => s.lat == null || s.lng == null).length;
+  if (needGeocode > 0){
+    toast(`กำลังปักหมุด... (${needGeocode} ต้อง geocode)`, '', 2000);
+  } else {
+    toast('กำลังปักหมุด...', '', 1000);
+  }
 
   const monthsTH = ['','ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
   const bounds = [];
   for (const story of placedStories){
-    const geo = await geocodePlace(story.place);
-    if (!geo) continue;
+    let lat, lng;
+    // Use stored coords if available (instant, no API call)
+    if (story.lat != null && story.lng != null){
+      lat = story.lat;
+      lng = story.lng;
+    } else {
+      // Fallback: geocode the place name (slow, may fail)
+      const geo = await geocodePlace(story.place);
+      if (!geo) continue;
+      lat = geo.lat;
+      lng = geo.lon;
+    }
     const moodEm = story.mood ? MOOD_EMOJI[story.mood] || '' : '';
     const dateLabel = story.day ? `${story.day} ${monthsTH[story.month]} ${story.year}` : `${monthsTH[story.month]} ${story.year}`;
+    const mapsUrl = story.mapsUrl || `https://www.google.com/maps?q=${lat},${lng}`;
     const popup = `
       <div>
         <h5>${escapeHtml(story.title)} ${moodEm}</h5>
-        <small>${escapeHtml(story.place)} · ${dateLabel}</small>
+        <small>${escapeHtml(story.place || `${lat.toFixed(3)}, ${lng.toFixed(3)}`)} · ${dateLabel}</small>
         <p>${escapeHtml((story.text||'').slice(0, 80))}${story.text && story.text.length > 80 ? '...' : ''}</p>
         <a class="popup-link" data-story-id="${story.id}">เปิดอ่าน →</a>
+        <a class="popup-link" href="${mapsUrl}" target="_blank" rel="noopener" style="margin-left:10px">🗺️ Google Maps ↗</a>
       </div>`;
-    const marker = L.marker([geo.lat, geo.lon]).addTo(_memoryMap).bindPopup(popup);
+    const marker = L.marker([lat, lng]).addTo(_memoryMap).bindPopup(popup);
     marker.on('popupopen', e => {
-      const link = e.popup.getElement().querySelector('.popup-link');
+      const link = e.popup.getElement().querySelector('.popup-link[data-story-id]');
       if (link) link.addEventListener('click', () => openStory(story.id));
     });
     _mapMarkers.push(marker);
-    bounds.push([geo.lat, geo.lon]);
+    bounds.push([lat, lng]);
   }
 
   if (bounds.length > 0){
