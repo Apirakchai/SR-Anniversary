@@ -389,9 +389,11 @@ a{color:inherit}
 .bnav-btn.active .bnav-ico{transform:scale(1.1)}
 
 .bnav-ico{
-  font-size:20px;line-height:1;
+  width:22px;height:22px;display:flex;align-items:center;justify-content:center;
+  line-height:1;
   transition:transform .25s cubic-bezier(.34,1.56,.64,1);
 }
+.bnav-ico svg{width:22px;height:22px;display:block}
 .bnav-lbl{
   font-size:10px;font-weight:500;letter-spacing:.02em;
   font-family:'Sarabun',sans-serif;
