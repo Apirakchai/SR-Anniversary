@@ -123,7 +123,19 @@ let state = {
 // ───────────────────────────────────────────────
 // UTILITIES
 // ───────────────────────────────────────────────
-const $  = (s, p=document) => p.querySelector(s);
+// DOM query helpers with internal cache for static IDs
+const _selectorCache = new Map();
+const $ = (s, p=document) => {
+  // Cache only when querying document and selector is an ID (most common, static)
+  if (p === document && s.charAt(0) === '#' && !s.includes(' ')){
+    let el = _selectorCache.get(s);
+    if (el && el.isConnected) return el;
+    el = document.querySelector(s);
+    if (el) _selectorCache.set(s, el);
+    return el;
+  }
+  return p.querySelector(s);
+};
 const $$ = (s, p=document) => [...p.querySelectorAll(s)];
 
 async function sha256(text){
@@ -302,6 +314,7 @@ function initApp(){
   startSeasonalEffects();
   updateSettingsTimes();
   registerServiceWorker();
+  initVisibilityHandler();
 
   const cid = (CONFIG.GOOGLE_CLIENT_ID && !CONFIG.GOOGLE_CLIENT_ID.startsWith('PASTE_'))
               ? CONFIG.GOOGLE_CLIENT_ID : localStorage.getItem(LS.CLIENT_ID);
@@ -310,6 +323,22 @@ function initApp(){
 
   if (cid && key) initGoogleAPI(cid, key);
   else setSyncIndicator('off', 'no creds');
+}
+
+// Pause animations + sync when tab/PWA in background to save CPU/battery
+function initVisibilityHandler(){
+  document.addEventListener('visibilitychange', ()=>{
+    if (document.hidden){
+      // Pause animation layers (CSS)
+      document.body.classList.add('app-hidden');
+    } else {
+      document.body.classList.remove('app-hidden');
+      // Trigger one immediate sync on resume (don't wait for next tick)
+      if (state.google.accessToken && typeof autoSyncTick === 'function'){
+        autoSyncTick();
+      }
+    }
+  });
 }
 
 function initLogout(){
@@ -960,22 +989,58 @@ function getPhotoSrc(photo){
 }
 
 // Hydrate img elements with blob URLs (async, after render)
+// Lazy hydrate: only fetch Drive images when they enter viewport
+let _imgObserver = null;
+function getImgObserver(){
+  if (_imgObserver) return _imgObserver;
+  if (!('IntersectionObserver' in window)) return null;
+  _imgObserver = new IntersectionObserver((entries)=>{
+    entries.forEach(entry => {
+      if (entry.isIntersecting){
+        const img = entry.target;
+        const driveId = img.dataset.driveId;
+        if (!driveId || img.dataset.hydrated === '1') return;
+        img.dataset.hydrated = '1';
+        img.style.opacity = '0.3';
+        img.style.transition = 'opacity .3s';
+        fetchImageBlobUrl(driveId).then(url => {
+          if (url){
+            img.src = url;
+            img.style.opacity = '1';
+          }
+        }).catch(()=>{ img.style.opacity = '1'; });
+        _imgObserver.unobserve(img);
+      }
+    });
+  }, { rootMargin: '200px' }); // Start loading 200px before entering viewport
+  return _imgObserver;
+}
+
 function hydrateImages(rootEl = document){
   const imgs = rootEl.querySelectorAll('img[data-drive-id]');
-  imgs.forEach(img => {
-    const driveId = img.dataset.driveId;
-    if (!driveId || img.dataset.hydrated === '1') return;
-    img.dataset.hydrated = '1';
-    // Fade in once loaded
-    img.style.opacity = '0.3';
-    img.style.transition = 'opacity .3s';
-    fetchImageBlobUrl(driveId).then(url => {
-      if (url){
-        img.src = url;
-        img.style.opacity = '1';
-      }
-    }).catch(()=>{ img.style.opacity = '1'; });
-  });
+  const observer = getImgObserver();
+  if (observer){
+    // Modern path: observe + lazy load
+    imgs.forEach(img => {
+      if (img.dataset.hydrated === '1') return;
+      observer.observe(img);
+    });
+  } else {
+    // Fallback: hydrate all immediately (old browsers)
+    imgs.forEach(img => {
+      const driveId = img.dataset.driveId;
+      if (!driveId || img.dataset.hydrated === '1') return;
+      img.dataset.hydrated = '1';
+      img.style.opacity = '0.3';
+      img.style.transition = 'opacity .3s';
+      fetchImageBlobUrl(driveId).then(url => {
+        if (url){
+          img.src = url;
+          img.style.opacity = '1';
+        }
+      }).catch(()=>{ img.style.opacity = '1'; });
+    });
+  }
 }
 
 // Cap caches to prevent unbounded memory growth on iOS PWA
@@ -1412,10 +1477,11 @@ function repopulateFilterDays(){
 
   const sel = $('#filterDay');
   const cur = sel.value;
-  sel.innerHTML = '<option value="">ทุกวัน</option>';
+  let html = '<option value="">ทุกวัน</option>';
   for (let d=1; d<=dayCount; d++){
-    sel.innerHTML += `<option value="${d}">วันที่ ${d}</option>`;
+    html += `<option value="${d}">วันที่ ${d}</option>`;
   }
+  sel.innerHTML = html;
   if (cur && parseInt(cur,10) <= dayCount) sel.value = cur;
   else { sel.value = ''; state.filters.day = ''; }
 }
@@ -1483,6 +1549,18 @@ function getStoryPhotos(storyId){
     }
   }
   return _photoCache.get(storyId) || [];
+}
+
+// Debounced render wrapper — prevents thrashing during rapid sync/typing
+let _renderQueued = false;
+function renderAllDebounced(){
+  if (_renderQueued) return;
+  _renderQueued = true;
+  // Use rAF to batch with browser's paint cycle
+  requestAnimationFrame(()=>{
+    _renderQueued = false;
+    renderAll();
+  });
 }
 
 function renderAll(){

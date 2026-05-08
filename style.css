@@ -1489,3 +1489,64 @@ a{color:inherit}
   transition:color .2s;
 }
 .mc-place-link:hover{color:var(--text-main);border-bottom-color:var(--text-main)}
+
+/* ═══════════════════════════════════════════════════════
+   PERFORMANCE OPTIMIZATIONS
+═══════════════════════════════════════════════════════ */
+
+/* Pause all animations when PWA in background (saves battery) */
+.app-hidden *,
+.app-hidden *::before,
+.app-hidden *::after{
+  animation-play-state:paused !important;
+  transition:none !important;
+}
+
+/* Hint browser to use GPU for transform-heavy elements */
+.bottom-nav,
+.fab-add,
+.fab-roulette,
+.toast,
+.modal,
+.story-card,
+.heart-layer,
+.seasonal-layer{
+  will-change:transform;
+  transform:translateZ(0);
+  backface-visibility:hidden;
+}
+
+/* Reduce motion for users who prefer it (iOS Settings → Accessibility) */
+@media (prefers-reduced-motion: reduce){
+  *,
+  *::before,
+  *::after{
+    animation-duration:0.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:0.01ms !important;
+    scroll-behavior:auto !important;
+  }
+  .heart-layer,.seasonal-layer{display:none !important}
+}
+
+/* Smooth scrolling on iOS */
+html{
+  -webkit-overflow-scrolling:touch;
+  scroll-behavior:smooth;
+}
+
+/* Improve text rendering on mobile */
+body{
+  text-rendering:optimizeSpeed;
+}
+
+/* Lazy-render off-screen elements */
+.story-card{
+  content-visibility:auto;
+  contain-intrinsic-size:auto 400px;
+}
+
+/* Image rendering */
+img{
+  image-rendering:auto;
+}
