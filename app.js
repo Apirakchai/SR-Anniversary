@@ -463,9 +463,9 @@ function openPlacePicker(){
       const initLat = state.pendingPlacePin?.lat ?? 13.7563;
       const initLng = state.pendingPlacePin?.lng ?? 100.5018;
       _ppMap = L.map('ppMap', { zoomControl: true }).setView([initLat, initLng], state.pendingPlacePin ? 15 : 11);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution:'&copy; OSM',
-        maxZoom: 19,
+      L.tileLayer('https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
+        attribution:'&copy; Google Maps',
+        maxZoom: 20, subdomains: ['0','1','2','3'],
       }).addTo(_ppMap);
       _ppMap.on('click', e=>{
         setMarker(e.latlng.lat, e.latlng.lng);
@@ -3875,8 +3875,10 @@ async function renderMemoryMap(){
   // Init map once (default Thailand center)
   if (!_memoryMap){
     _memoryMap = L.map(wrap, { scrollWheelZoom: true, attributionControl: true }).setView([13.736, 100.523], 6);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19, attribution: '&copy; OpenStreetMap'
+    // Google Maps tiles (no API key needed)
+    L.tileLayer('https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
+      maxZoom: 20, subdomains: ['0','1','2','3'],
+      attribution: '&copy; Google Maps'
     }).addTo(_memoryMap);
   }
 

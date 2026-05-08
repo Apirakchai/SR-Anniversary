@@ -1,7 +1,7 @@
 /* Safe & Ruang · Service Worker
    Caches the app shell for offline use.
 */
-const CACHE_NAME = 'sr-anniversary-v11';
+const CACHE_NAME = 'sr-anniversary-v12';
 const APP_SHELL = [
   './',
   './index.html',

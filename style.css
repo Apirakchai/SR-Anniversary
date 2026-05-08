@@ -825,17 +825,23 @@ a{color:inherit}
 ═══════════════════════════════════════════════════════ */
 .toast{
   position:fixed;
-  bottom:calc(82px + var(--safe-bottom, 0px));
-  left:50%;
-  transform:translateX(-50%) translateY(180%);
-  padding:14px 22px;border-radius:14px;
-  background:var(--text-main);color:var(--bg-app);font-size:14px;letter-spacing:.02em;
-  box-shadow:var(--shadow-lg);z-index:400;transition:transform .35s cubic-bezier(.2,.9,.3,1.2);
-  max-width:90vw;text-align:center;
+  top:calc(72px + var(--safe-top, 0px));
+  right:16px;
+  left:auto;
+  transform:translateX(120%);
+  padding:12px 20px;border-radius:12px;
+  background:var(--text-main);color:var(--bg-app);font-size:13px;letter-spacing:.02em;
+  box-shadow:var(--shadow-lg);z-index:400;
+  transition:transform .35s cubic-bezier(.2,.9,.3,1.2);
+  max-width:calc(100vw - 32px);text-align:left;
 }
-.toast.show{transform:translateX(-50%) translateY(0)}
+.toast.show{transform:translateX(0)}
 .toast.error{background:var(--rose-deep);color:#fff}
 .toast.success{background:#3e7050;color:#fff}
+
+@media (min-width: 768px){
+  .toast{top:80px;right:24px;max-width:380px}
+}
 
 
 /* ═══════════════════════════════════════════════════════
@@ -900,8 +906,11 @@ a{color:inherit}
 .place-input-row{
   display:flex;gap:8px;align-items:stretch;
 }
-.place-input-row #storyPlace{flex:1}
+.place-input-row #storyPlace{
+  flex:1;min-width:0;width:auto !important;
+}
 .place-pin-btn{
+  flex-shrink:0;
   width:46px;border-radius:12px;
   background:var(--bg-input);border:1px solid var(--border-soft);
   color:var(--gold);
@@ -929,10 +938,14 @@ a{color:inherit}
 
 /* Place Picker Modal */
 #placePickerModal{
-  background:rgba(10,31,68,.6);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  position:fixed;inset:0;z-index:200;
+  background:rgba(10,31,68,.6);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  display:flex;align-items:center;justify-content:center;
   padding:0;
+  animation:fadeIn .25s;
 }
-#placePickerModal.hidden{display:none}
+#placePickerModal.hidden{display:none !important}
 .pp-content{
   background:var(--bg-app);
   width:100%;max-width:560px;
@@ -940,7 +953,7 @@ a{color:inherit}
   border-radius:18px;overflow:hidden;
   display:flex;flex-direction:column;
   box-shadow:var(--shadow-lg);
-  margin:auto;
+  position:relative;
 }
 .pp-header{
   padding:16px 20px;
